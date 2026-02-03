@@ -121,13 +121,12 @@ The LLM agent has access to three tools:
 If you use this software in your research, please cite:
 
 ```bibtex
-@software{Olivares_Urrutia_Webgrid_Eval_Benchmark_2026,
+@software{olivares2026webgrid,
   author  = {Olivares Urrutia, Omar},
   title   = {{Webgrid Eval: Benchmark for LLM Vision and Tool-Use Capabilities}},
   year    = {2026},
-  month   = {feb},
+  month   = feb,
   url     = {https://github.com/ofou/webgrid_eval},
-  version = {0.1.0}
 }
 ```
 
@@ -137,4 +136,4 @@ If you use this software in your research, please cite:
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+Contributions are welcome!
