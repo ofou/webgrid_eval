@@ -1,6 +1,5 @@
 """OpenAI Chat Completions API client; agentic loop with tool_calls."""
 
-import json
 import os
 import time
 from typing import Any
@@ -19,7 +18,7 @@ def get_client(
     base_url: str | None = None,
     api_key: str | None = None,
 ) -> OpenAI:
-    """Returns OpenAI client. Use base_url/api_key from YAML or env: WEBGRID_API_BASE_URL (local), OPENROUTER_API_KEY/OPENAI_API_KEY (OpenRouter)."""
+    """Return OpenAI client. Use base_url/api_key from YAML or env."""
     if base_url:
         base_url = base_url.rstrip("/")
         if not base_url.endswith("/v1"):
@@ -29,9 +28,7 @@ def get_client(
         elif "openrouter" in base_url.lower():
             key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
             if not key:
-                raise ValueError(
-                    "OPENROUTER_API_KEY or OPENAI_API_KEY environment variable required when using OpenRouter (base_url from YAML)."
-                )
+                raise ValueError("OPENROUTER_API_KEY or OPENAI_API_KEY required for OpenRouter.")
         else:
             key = "lm-studio"
         return OpenAI(base_url=base_url, api_key=key)
@@ -54,11 +51,13 @@ SYSTEM_PROMPT = """Play Webgrid
 
 At Neuralink, we use a game called Webgrid to test how precisely you can control a computer.
 
-The goal of the game is to click targets on a grid as fast as possible while minimizing misclicks. Your score, measured in bits per second (BPS), is derived from net correct targets selected per minute (NTPM) and grid size.
+The goal is to click targets on a grid as fast as possible while minimizing misclicks.
+Your score (BPS) is derived from net correct targets per minute (NTPM) and grid size.
 
-Our eighth clinical trial participant achieved a score of 10.39 BPS controlling his computer with his brain.
+Our eighth clinical trial participant achieved 10.39 BPS controlling his computer with his brain.
 
-Do not repeat the same coordinates after an incorrect click—the target moves. Find the new blue cell each time.
+Do not repeat the same coordinates after an incorrect click—the target moves.
+Find the new blue cell each time.
 
 How well can you do?"""
 
@@ -199,11 +198,14 @@ def run_agentic_loop(
     max_images: int | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Run the agentic loop using OpenAI Chat Completions API.
+
     Session starts with an initial grid screenshot so the model sees the grid first.
     If save_dir is set, every screenshot (initial + each click) is saved there as <unixtime_ms>.png.
     If max_seconds is set, stop after that many seconds per model.
+    If reasoning_effort is set (minimal, low, medium, high), pass to Gemini 3 models.
     Returns (final_score, messages).
     """
     from .screenshot import render_grid_screenshot
@@ -216,6 +218,9 @@ def run_agentic_loop(
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
 
+    # Track target positions for GIF maker (saved to targets.json, not sent to model)
+    target_events: list[dict[str, Any]] = []
+
     def _get_relative_path(save_dir: str, start_time: float) -> str:
         return os.path.join(save_dir, f"{int((time.time() - start_time) * 1000):05d}ms.png")
 
@@ -224,17 +229,20 @@ def run_agentic_loop(
     )
     b64 = render_grid_screenshot(state, save_path=initial_save)
 
+    # Record initial target position
+    target_events.append(
+        {
+            "type": "start",
+            "ts_ms": 0,
+            "target_row": getattr(state, "target_row", -1),
+            "target_col": getattr(state, "target_col", -1),
+            "grid_side": state.grid_side,
+        }
+    )
+
     msg = {
         "role": "user",
         "content": [
-            {
-                "type": "text",
-                "text": (
-                    "You cannot click at coordinates—only relative moves. Use screen() to see the current state. "
-                    "Move the cursor with mouse_move(dx, dy) (positive dx = right, dy = down). "
-                    "Click with mouse_click() at the current cursor position. Hit the blue target; wrong clicks move the target. Prefer accuracy over speed."
-                ),
-            },
             {
                 "type": "image_url",
                 "image_url": {"url": f"data:image/png;base64,{b64}"},
@@ -248,9 +256,15 @@ def run_agentic_loop(
     wall_clock_start = time.time()
 
     for _ in range(MAX_TOOL_ROUNDS):
+        elapsed = time.time() - wall_clock_start
         if max_seconds is not None:
-            if time.time() - wall_clock_start >= max_seconds:
+            if elapsed >= max_seconds:
                 break
+            # Dynamic timeout: remaining time + small buffer, capped at 60s
+            remaining = max_seconds - elapsed
+            api_timeout = min(remaining + 5.0, 60.0)
+        else:
+            api_timeout = 60.0
 
         # Sanitize messages: remove internal keys (e.g. _screenshot_filename)
         sanitized_messages = [
@@ -259,26 +273,44 @@ def run_agentic_loop(
         if max_images is not None:
             sanitized_messages = _truncate_messages_to_max_images(sanitized_messages, max_images)
 
-        # Call Chat Completions API with tools (retry on rate limits, errors, with exponential backoff)
+        # Call Chat Completions API with tools (retry on rate limits / errors)
         resp = None
         max_retries = 6
         base_delay = 5.0
 
         for attempt in range(max_retries):
             try:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=sanitized_messages,
-                    tools=TOOLS_OPENAI,
-                    timeout=180.0,
-                )
+                # Build API call kwargs
+                api_kwargs: dict[str, Any] = {
+                    "model": model,
+                    "messages": sanitized_messages,
+                    "tools": TOOLS_OPENAI,
+                    "timeout": api_timeout,
+                }
+                # Add reasoning_effort for Gemini 3 thinking control
+                # Maps to Gemini's thinking_level: minimal, low, medium, high
+                extra_body: dict[str, Any] = {}
+                if reasoning_effort:
+                    extra_body["reasoning_effort"] = reasoning_effort
+                # For Google's direct API, request actual thinking content (not just signatures)
+                # This returns readable thought summaries via include_thoughts
+                # Note: Google's OpenAI-compat API requires nested extra_body structure
+                if "generativelanguage.googleapis.com" in (base_url or ""):
+                    extra_body["extra_body"] = {
+                        "google": {"thinking_config": {"include_thoughts": True}}
+                    }
+                if extra_body:
+                    api_kwargs["extra_body"] = extra_body
+
+                resp = client.chat.completions.create(**api_kwargs)
                 break
             except (OpenAIRateLimitError, APIConnectionError, APITimeoutError) as e:
                 # Exponential backoff with jitter: delay = base * 2^attempt + random(0-2s)
                 delay = base_delay * (2**attempt) + (hash(str(time.time())) % 200) / 100
                 if attempt < max_retries - 1:
                     print(
-                        f"  ⏳ {model}: {type(e).__name__}, retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})"
+                        f"  ⏳ {model}: {type(e).__name__}, retrying in {delay:.1f}s... "
+                        f"(attempt {attempt + 1}/{max_retries})"
                     )
                     time.sleep(delay)
                 else:
@@ -289,7 +321,8 @@ def run_agentic_loop(
                 if attempt < max_retries - 1:
                     error_code = getattr(e, "code", None) or getattr(e, "status_code", "unknown")
                     print(
-                        f"  ⏳ {model}: API error {error_code}, retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})"
+                        f"  ⏳ {model}: API error {error_code}, retrying in {delay:.1f}s... "
+                        f"(attempt {attempt + 1}/{max_retries})"
                     )
                     time.sleep(delay)
                 else:
@@ -299,9 +332,34 @@ def run_agentic_loop(
                 f"Model {model} returned no choices (empty or filtered response). "
                 "Try another model or check provider status."
             )
+
+        # Check time again after API call (in case it took a long time)
+        if max_seconds is not None and time.time() - wall_clock_start >= max_seconds:
+            break
+
         msg = resp.choices[0].message
 
-        # Extract tool_calls from API response
+        # Extract thinking content from Google's API response (when include_thoughts is enabled)
+        # The thinking text may come in extra_content.google.thinking or similar fields
+        thinking_content = None
+        msg_extra_content = getattr(msg, "extra_content", None)
+        if msg_extra_content and isinstance(msg_extra_content, dict):
+            google_extra = msg_extra_content.get("google", {})
+            thinking_content = google_extra.get("thinking") or google_extra.get("thought_summary")
+
+        # Debug: print raw response structure to identify thinking content location
+        if os.environ.get("DEBUG_THINKING"):
+            import json
+
+            print(f"DEBUG msg.content type: {type(msg.content)}")
+            is_str = isinstance(msg.content, str) and msg.content
+            content_preview = msg.content if is_str else msg.content
+            print(f"DEBUG msg.content: {content_preview}")
+            print(f"DEBUG msg_extra_content: {msg_extra_content}")
+            if hasattr(resp.choices[0], "extra_content"):
+                print(f"DEBUG choice.extra_content: {resp.choices[0].extra_content}")
+
+        # Extract tool_calls from API response, preserving thought_signature for Gemini 3
         tool_calls_raw = getattr(msg, "tool_calls", None) or []
         tool_calls_list: list[dict[str, Any]] = []
         for tc in tool_calls_raw:
@@ -309,19 +367,40 @@ def run_agentic_loop(
             fn = tc.function if hasattr(tc, "function") else tc.get("function", {})
             name = fn.name if hasattr(fn, "name") else fn.get("name", "")
             args_str = fn.arguments if hasattr(fn, "arguments") else fn.get("arguments", "{}")
-            tool_calls_list.append(
-                {
-                    "id": tid,
-                    "type": "function",
-                    "function": {"name": name, "arguments": args_str},
-                }
-            )
 
-        assistant_msg = {
+            tool_call_entry: dict[str, Any] = {
+                "id": tid,
+                "type": "function",
+                "function": {"name": name, "arguments": args_str},
+            }
+
+            # Preserve extra_content (including thought_signature and thinking) for Gemini 3
+            extra_content = None
+            if hasattr(tc, "extra_content"):
+                extra_content = tc.extra_content
+            elif isinstance(tc, dict) and "extra_content" in tc:
+                extra_content = tc["extra_content"]
+
+            # Check for thinking content in tool call extra_content
+            if extra_content and isinstance(extra_content, dict):
+                google_tc = extra_content.get("google", {})
+                tc_thinking = google_tc.get("thinking") or google_tc.get("thought_summary")
+                if tc_thinking and not thinking_content:
+                    thinking_content = tc_thinking
+
+            # Note: extra_content (thought_signature) is intentionally NOT saved to history
+            # to avoid bloating the JSON with large opaque signatures
+
+            tool_calls_list.append(tool_call_entry)
+
+        assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": msg.content or None,
             "tool_calls": tool_calls_list,
         }
+        # Include thinking content in the message if available
+        if thinking_content:
+            assistant_msg["thinking"] = thinking_content
         messages.append(assistant_msg)
 
         if not tool_calls_list:
@@ -337,7 +416,10 @@ def run_agentic_loop(
                 "content": [
                     {
                         "type": "text",
-                        "text": "Continue playing. Use screen() to see the grid, then mouse_move and mouse_click.",
+                        "text": (
+                            "Continue playing. Use screen() to see the grid, "
+                            "then mouse_move and mouse_click."
+                        ),
                     },
                     {
                         "type": "image_url",
@@ -380,6 +462,18 @@ def run_agentic_loop(
                 for m in extra_messages:
                     messages.append(m)
 
+            # Track target position after each click (for GIF maker)
+            if name == "mouse_click":
+                ts_ms = int((time.time() - state.start_time) * 1000) if state.start_time else 0
+                target_events.append(
+                    {
+                        "type": "click",
+                        "ts_ms": ts_ms,
+                        "target_row": getattr(state, "target_row", -1),
+                        "target_col": getattr(state, "target_col", -1),
+                    }
+                )
+
             # Adaptive hints: detect consecutive errors and provide stronger guidance
             if name == "mouse_click":
                 try:
@@ -408,14 +502,15 @@ def run_agentic_loop(
                                     {
                                         "type": "text",
                                         "text": (
-                                            f"ATTENTION: You've had {consecutive_errors} consecutive incorrect clicks.\n\n"
-                                            f"DEBUGGING STRATEGY:\n"
-                                            f"1. Carefully examine the current image\n"
-                                            f"2. Locate the BLUE cell (ignore any RED cells from previous errors)\n"
-                                            f"3. Use mouse_move(dx, dy) to move the cursor toward the blue cell\n"
-                                            f"4. When the cursor is over the blue cell, call mouse_click()\n"
-                                            f"5. Double-check: the gray cell shows where your cursor is\n\n"
-                                            f"TIP: The blue target moves after each wrong click. Always look for the NEW blue cell!"
+                                            f"ATTENTION: You've had {consecutive_errors} "
+                                            "consecutive incorrect clicks.\n\n"
+                                            "DEBUGGING STRATEGY:\n"
+                                            "1. Carefully examine the current image\n"
+                                            "2. Locate the BLUE cell (ignore RED)\n"
+                                            "3. Use mouse_move(dx, dy) toward the blue cell\n"
+                                            "4. When cursor over blue cell, call mouse_click()\n"
+                                            "5. Double-check: gray cell shows cursor position\n\n"
+                                            "TIP: After wrong click find NEW blue cell!"
                                         ),
                                     }
                                 ],
@@ -426,5 +521,11 @@ def run_agentic_loop(
 
     # Update state end_time
     state.end_time = time.time()
+
+    # Save target events for GIF maker (not sent to model)
+    if save_dir and target_events:
+        targets_path = os.path.join(save_dir, "targets.json")
+        with open(targets_path, "w") as f:
+            json.dump(target_events, f, indent=2)
 
     return state.score, messages

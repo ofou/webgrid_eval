@@ -1,7 +1,10 @@
 base_url: https://generativelanguage.googleapis.com/v1beta/openai
 api_key: AIzaSyC5AZzdt-XT2C_nqG28TbKOEqPLjBN6Jug
-grid_size: 900
+grid_size: 256
 canvas_size: 512
 max_seconds: 70
+
 models:
-  - gemini-3-flash-preview
+  - id: gemini-3-flash-preview
+  # - id: gemini-flash-lite-latest
+  # - id: gemini-flash-latest

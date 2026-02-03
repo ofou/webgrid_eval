@@ -156,7 +156,7 @@ class TestHUD:
             hud = _hud(state)
 
         net = 8
-        expected_bps = (net / 60.0) * math.log2(64**2 - 1)
+        expected_bps = (net / 60.0) * math.log2(64)
         assert abs(hud["bps"] - expected_bps) < 0.01
 
     def test_hud_zero_net(self):
@@ -318,11 +318,10 @@ class TestExecuteTool:
         result, messages = execute_tool("screen", {}, state)
 
         assert isinstance(result, str)
-        # Result should be JSON
-        data = json.loads(result)
-        assert "hud" in data
-        assert "cursor" in data
-        assert data["event"] == "screen"
+        # Result should be compact HUD line: "MM:SS X.XX BPS N NTPM WxH"
+        assert "BPS" in result
+        assert "NTPM" in result
+        assert "8×8" in result  # grid_side=8 for grid_size=64
 
         # Should return image messages
         assert messages is not None
@@ -341,9 +340,7 @@ class TestExecuteTool:
         assert state.cursor_x == 110
         assert state.cursor_y == 95
 
-        assert isinstance(result, str)
-        data = json.loads(result)
-        assert data["event"] == "move"
+        assert result == "OK"
 
         # No image messages for move
         assert messages is None
@@ -372,9 +369,7 @@ class TestExecuteTool:
 
         result, messages = execute_tool("mouse_click", {}, state)
 
-        assert isinstance(result, str)
         data = json.loads(result)
-        assert data["event"] == "click"
         assert data["correct"] is True
         assert state.score == 1
 

@@ -28,6 +28,7 @@ class GameState:
 
     @property
     def grid_side(self) -> int:
+        """Return grid side length (e.g. 8 for 8x8)."""
         side = int(self.grid_size**0.5)
         if side * side != self.grid_size:
             raise ValueError(f"grid_size must be a perfect square, got {self.grid_size}")
@@ -35,15 +36,16 @@ class GameState:
 
     @property
     def target_row(self) -> int:
+        """Return target row index."""
         return self.active_index // self.grid_side
 
     @property
     def target_col(self) -> int:
+        """Return target column index."""
         return self.active_index % self.grid_side
 
     def select_random_target(self) -> None:
         """Pick a new random target different from current."""
-        side = self.grid_side
         while True:
             random_index = random.randint(0, self.grid_size - 1)
             if random_index != self.active_index:
@@ -51,17 +53,18 @@ class GameState:
                 return
 
     def move_cursor(self, row: int, col: int) -> None:
+        """Set cursor to (row, col) clamped to grid."""
         side = self.grid_side
         self.cursor_row = max(0, min(row, side - 1))
         self.cursor_col = max(0, min(col, side - 1))
 
     def click_at(self, row: int, col: int) -> tuple[bool, dict]:
-        """Click at cell (row, col). Updates cursor to that position and processes click. Returns (correct, data)."""
+        """Click at cell (row, col). Updates cursor and processes click. Returns (correct, data)."""
         self.move_cursor(row, col)
         return self._click_at(row, col)
 
     def _click_at(self, row: int, col: int) -> tuple[bool, dict]:
-        """Check if (row, col) is the target. If yes, advance target and return (True, new_target). Else return (False, {})."""
+        """Check if (row, col) is the target; advance and return (True, data) or (False, {})."""
         side = self.grid_side
         self.last_click_row = row
         self.last_click_col = col

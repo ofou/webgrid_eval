@@ -6,7 +6,7 @@ import math
 import shutil
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from fastapi import FastAPI, HTTPException
@@ -24,6 +24,7 @@ def compute_ntpm_bps(
     correct: int, incorrect: int, elapsed_seconds: float, grid_size: int
 ) -> tuple[float, float]:
     """Net = correct - incorrect.
+
     NTPM = Net (raw count).
     BPS (Neuralink): (net / 60) * log2(grid_size² - 1).
 
@@ -33,18 +34,43 @@ def compute_ntpm_bps(
     # Frontend: NTPM is just the net count (displayed as "NTPM: {net}")
     ntpm = float(net)
 
-    # Neuralink: BPS = (net / 60) * log2(N² - 1), N = grid_size (number of cells)
+    # Neuralink Webgrid frontend formula: BPS = (net / 60) * log2(N)
+    # where N = total grid cells (e.g., 900 for 30x30)
+    # Reference: _enviroment/src/features/game/components/grid/hooks/useBitsPerSecond.tsx
     # If net <= 0, it returns 0.
     if net <= 0:
         return ntpm, 0.0
 
-    bps = (net / 60.0) * math.log2(grid_size**2 - 1)
+    bps = (net / 60.0) * math.log2(grid_size)
     return ntpm, bps
 
 
 def _format_peak_score(bps: float, ntpm: float) -> str:
     """Format peak score like frontend: '9.98 BPS (61 NTPM)'."""
     return f"{bps:.2f} BPS ({int(ntpm)} NTPM)"
+
+
+def _aggregate_results_json(results_dir: Path) -> list[dict[str, Any]]:
+    """Scan results_dir/*/result.json and return merged results sorted by score."""
+    all_results: list[dict[str, Any]] = []
+    for subdir in sorted(results_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        result_file = subdir / "result.json"
+        if not result_file.exists():
+            continue
+        try:
+            data = json.loads(result_file.read_text())
+            if not isinstance(data, dict):
+                continue
+            if "screenshots_dir" not in data:
+                data["screenshots_dir"] = str(subdir)
+            all_results.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    # Sort by BPS descending, then NTPM descending
+    all_results.sort(key=lambda r: (-r.get("bps", 0), -r.get("ntpm", 0)))
+    return all_results
 
 
 app = FastAPI(title="Webgrid Eval API")
@@ -59,6 +85,8 @@ app.add_middleware(
 
 
 class SessionStartRequest(BaseModel):
+    """Request body for starting an eval session."""
+
     model: str = DEFAULT_MODEL
     grid_size: int = DEFAULT_GRID_SIZE  # 8x8
     max_seconds: int | None = None  # stop eval after this many seconds per model
@@ -78,6 +106,8 @@ class SessionStartRequest(BaseModel):
 
 
 class SessionStartResponse(BaseModel):
+    """Response after session completes (score, NTPM, BPS, etc.)."""
+
     model: str
     score: int
     incorrect: int
@@ -92,13 +122,48 @@ class SessionStartResponse(BaseModel):
     screenshots_dir: str | None = None
 
 
-def _model_to_dir_name(model: str) -> str:
-    """e.g. moonshotai/kimi-k2.5 -> moonshotai-kimi-k2.5"""
-    return model.replace("/", "-").replace(" ", "_")
+def _model_to_dir_name(model: str, params: dict[str, Any] | None = None) -> str:
+    """Generate folder name from model + params.
+
+    Examples:
+        - "gemini-3-flash-preview" -> "gemini-3-flash-preview"
+        - "gemini-3-flash-preview", {"reasoning_effort": "low"} -> "gemini-3-flash-preview:low"
+        - "openai/gpt-4o" -> "openai-gpt-4o"
+    """
+    name = model.replace("/", "-").replace(" ", "_")
+    if params:
+        if "reasoning_effort" in params:
+            name = f"{name}:{params['reasoning_effort']}"
+        else:
+            for k, v in sorted(params.items()):
+                name = f"{name}:{k}={v}"
+    return name
+
+
+def parse_model_config(model_entry: str | dict) -> tuple[str, dict[str, Any]]:
+    """Parse a model entry from config.
+
+    Supports both formats:
+      - Simple string: "gemini-3-flash-preview"
+      - Dict with params: {id: "gemini-3-flash-preview", reasoning_effort: "low", ...}
+
+    Returns:
+        Tuple of (model_id, extra_params)
+    """
+    if isinstance(model_entry, str):
+        return model_entry, {}
+    elif isinstance(model_entry, dict):
+        model_id = model_entry.get("id") or model_entry.get("model")
+        if not model_id:
+            raise ValueError(f"Model config missing 'id' field: {model_entry}")
+        extra_params = {k: v for k, v in model_entry.items() if k not in ("id", "model")}
+        return model_id, extra_params
+    else:
+        raise ValueError(f"Invalid model entry type: {type(model_entry)}")
 
 
 def _messages_for_dump(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Copy messages and replace inline base64 image URLs with a placeholder so the dump stays small."""
+    """Copy messages and replace base64 image URLs with a placeholder so the dump stays small."""
     out: list[dict[str, Any]] = []
     for m in messages:
         m = dict(m)
@@ -131,7 +196,7 @@ def _messages_for_dump(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @app.post("/api/session/start", response_model=SessionStartResponse)
 def session_start(req: SessionStartRequest) -> SessionStartResponse:
-    """Start a session: init game state, run agentic loop with OpenRouter (screen, mouse_move, mouse_click), return score and optional history. Screenshots are saved under results/<model_name>/<unixtime>.png."""
+    """Start a session: run agentic loop (screen, mouse_move, mouse_click), return score."""
     state = GameState(grid_size=req.grid_size, canvas_size=req.canvas_size)
     state.start_time = time.time()
     state.select_random_target()
@@ -173,14 +238,16 @@ def session_start(req: SessionStartRequest) -> SessionStartResponse:
     try:
         result_path.write_text(json.dumps(resp.model_dump(exclude={"history"}), indent=2))
     except OSError as e:
-        raise RuntimeError(f"Failed to write result.json to {result_path}: {e}")
+        raise RuntimeError(f"Failed to write result.json to {result_path}: {e}") from e
     history_path = Path(save_dir) / "history.json"
     history_path.write_text(json.dumps(_messages_for_dump(messages), indent=2, default=str))
     return resp
 
 
 class EvalRunRequest(BaseModel):
-    models: list[str] = []
+    """Request body for batch eval (models list or models_file path)."""
+
+    models: list[str | dict[str, Any]] = []  # string or dict with {id, reasoning_effort, ...}
     models_file: str | None = (
         None  # path to YAML with "models: [...]" and optional base_url, api_key
     )
@@ -193,6 +260,8 @@ class EvalRunRequest(BaseModel):
 
 
 class EvalModelResult(BaseModel):
+    """Single model result (score, NTPM, BPS) or error."""
+
     model: str
     score: int = 0
     incorrect: int = 0
@@ -207,13 +276,15 @@ class EvalModelResult(BaseModel):
 
 
 class EvalRunResponse(BaseModel):
+    """Batch eval response: list of EvalModelResult."""
+
     results: list[EvalModelResult]
 
 
 def _load_config_from_yaml(
     path: str,
-) -> tuple[list[str], str | None, str | None, int, float, int | None, int]:
-    """Load config from YAML. Returns (models, base_url, api_key, grid_size, max_seconds, max_images, canvas_size)."""
+) -> tuple[list[str | dict[str, Any]], str | None, str | None, int, float, int | None, int]:
+    """Load YAML. Returns models, base_url, api_key, grid_size, max_seconds, max_images, canvas."""
     p = Path(path)
     if not p.is_absolute():
         p = Path.cwd() / path
@@ -239,15 +310,17 @@ async def _eval_single_model(
     base_url: str | None = None,
     api_key: str | None = None,
     canvas_size: int = 256,
+    model_params: dict[str, Any] | None = None,
 ) -> EvalModelResult:
     """Evaluate a single model (runs in executor to avoid blocking)."""
     loop = asyncio.get_event_loop()
+    reasoning_effort = model_params.get("reasoning_effort") if model_params else None
 
-    def _run_sync():
+    def _run_sync() -> EvalModelResult:
         state = GameState(grid_size=grid_size, canvas_size=canvas_size)
         state.start_time = time.time()
         state.select_random_target()
-        save_dir = str(Path("results") / _model_to_dir_name(model))
+        save_dir = str(Path("eval") / _model_to_dir_name(model, model_params))
         # Clear existing folder to ensure fresh results
         save_dir_path = Path(save_dir)
         if save_dir_path.exists():
@@ -261,6 +334,7 @@ async def _eval_single_model(
             max_images=max_images,
             base_url=base_url,
             api_key=api_key,
+            reasoning_effort=reasoning_effort,
         )
         history_path = Path(save_dir) / "history.json"
         history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,8 +342,10 @@ async def _eval_single_model(
         # Match official implementation: fixed duration (e.g. 70s), not variable actual elapsed
         elapsed = max_sec
         ntpm, bps = compute_ntpm_bps(state.score, state.incorrect_count, elapsed, grid_size)
+        # Use folder name (model:param) as the result model name
+        result_model_name = _model_to_dir_name(model, model_params)
         result = EvalModelResult(
-            model=model,
+            model=result_model_name,
             score=state.score,
             incorrect=state.incorrect_count,
             elapsed_seconds=elapsed,
@@ -291,8 +367,11 @@ async def _eval_single_model(
 
 @app.post("/api/eval/run", response_model=EvalRunResponse)
 async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
-    """Run sessions in parallel; return BPS and NTPM per model. When models_file is set, server loads YAML (base_url, api_key, grid_size, max_seconds, max_images); body overrides."""
-    models = list(req.models)
+    """Run sessions in parallel; return BPS and NTPM per model.
+
+    When models_file is set, server loads YAML (base_url, api_key, etc.); body overrides.
+    """
+    models: list[str | dict[str, Any]] = list(req.models)
     base_url = req.base_url
     api_key = req.api_key
     grid_size = req.grid_size
@@ -314,7 +393,7 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         if not models:
-            models = file_models
+            models = list(file_models)
         if file_base_url is not None:
             base_url = file_base_url
         if file_api_key is not None:
@@ -336,20 +415,27 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
     if not models:
         return EvalRunResponse(results=[])
 
+    # Parse model configs (support both string and dict formats)
+    parsed_models = []
+    for model_entry in models:
+        model_id, model_params = parse_model_config(model_entry)
+        parsed_models.append((model_id, model_params))
+
     # OpenRouter free tier: run sequentially to avoid 429 burst; local: run in parallel
     is_openrouter = base_url and "openrouter" in base_url.lower()
     if is_openrouter:
-        results = []
-        for model in models:
+        results: list[EvalModelResult | BaseException] = []
+        for model_id, model_params in parsed_models:
             try:
                 r = await _eval_single_model(
-                    model=model,
+                    model=model_id,
                     grid_size=grid_size,
                     max_seconds=max_sec,
                     max_images=max_images,
                     base_url=base_url,
                     api_key=api_key,
                     canvas_size=canvas_size,
+                    model_params=model_params,
                 )
                 results.append(r)
             except BaseException as e:
@@ -357,45 +443,53 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
     else:
         tasks = [
             _eval_single_model(
-                model=model,
+                model=model_id,
                 grid_size=grid_size,
                 max_seconds=max_sec,
                 max_images=max_images,
                 base_url=base_url,
                 api_key=api_key,
                 canvas_size=canvas_size,
+                model_params=model_params,
             )
-            for model in models
+            for model_id, model_params in parsed_models
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        results = list(results)
+        gathered: list[EvalModelResult | BaseException] = list(
+            await asyncio.gather(*tasks, return_exceptions=True)
+        )
+        results = gathered
     # Build final results: successful evals + error entries for failed models (partial results)
     final_results: list[EvalModelResult] = []
-    for i, r in enumerate(results):
-        if isinstance(r, BaseException):
+    for i, raw in enumerate(results):
+        if isinstance(raw, BaseException):
+            model_id, model_params = parsed_models[i]
+            # Include reasoning_effort in model name for error results
+            model_name = _model_to_dir_name(model_id, model_params) if model_params else model_id
             final_results.append(
                 EvalModelResult(
-                    model=models[i],
-                    error=str(r),
+                    model=model_name,
+                    error=str(raw),
                     grid_side=grid_size,
                 )
             )
-        elif isinstance(r, EvalModelResult):
-            final_results.append(r)
+        elif isinstance(raw, EvalModelResult):
+            final_results.append(cast(EvalModelResult, raw))
 
-    # Save aggregated results
+    # Save aggregated results from all subdirectories
     results_dir = Path("results")
     results_dir.mkdir(parents=True, exist_ok=True)
+    all_results = _aggregate_results_json(results_dir)
+    (results_dir / "results.json").write_text(json.dumps({"results": all_results}, indent=2))
+
+    # Return results from this run
     sorted_results = sorted(
         final_results,
         key=lambda r: (r.error is not None, -r.score, -r.ntpm),
-    )
-    (results_dir / "results.json").write_text(
-        json.dumps({"results": [r.model_dump() for r in sorted_results]}, indent=2)
     )
     return EvalRunResponse(results=sorted_results)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Health check endpoint."""
     return {"status": "ok"}

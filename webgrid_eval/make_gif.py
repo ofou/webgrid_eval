@@ -13,6 +13,7 @@ import json
 import re
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import cairosvg
 
@@ -29,7 +30,7 @@ CURSOR_DISPLAY_PX = 24
 _CURSOR_CACHE: tuple | None = None
 
 
-def _load_cursor():
+def _load_cursor() -> tuple[Any, int, int]:
     global _CURSOR_CACHE
     if _CURSOR_CACHE is not None:
         return _CURSOR_CACHE
@@ -48,7 +49,7 @@ def _load_cursor():
 
 
 # Default canvas size for backward compatibility
-DEFAULT_CANVAS_SIZE = 256
+DEFAULT_CANVAS_SIZE = 512
 DEFAULT_GRID_SIDE = 8
 K = 0.002
 
@@ -92,8 +93,8 @@ def detect_target_from_screenshot(img_path: Path, side: int) -> tuple[int, int] 
     for y in range(canvas_size):
         for x in range(canvas_size):
             pixel = pixels[x, y]
-            if len(pixel) >= 3:
-                r, g, b = pixel[:3]
+            if isinstance(pixel, (list, tuple)) and len(pixel) >= 3:
+                r, g, b = pixel[0], pixel[1], pixel[2]
                 if (abs(r - 10) < 20 and abs(g - 132) < 20 and abs(b - 255) < 20) or (
                     abs(r - 7) < 20 and abs(g - 100) < 20 and abs(b - 191) < 20
                 ):
@@ -144,15 +145,17 @@ def render_frame(
     cursor_y: int,
     side: int,
     error_cell: tuple[int, int] | None = None,
+    success_cell: tuple[int, int] | None = None,
     canvas_size: int = DEFAULT_CANVAS_SIZE,
 ) -> Image.Image:
-    """Render a single frame matching screenshot.py (Neuralink style): cells then grid lines on top."""
+    """Render a single frame (Neuralink style): cells then grid lines on top."""
     white = (255, 255, 255)
     black = (0, 0, 0)
     active_blue = (10, 132, 255)
     hover_gray = (191, 191, 191)
     active_hover_blue = (7, 100, 191)
-    error_red = (255, 0, 0)
+    error_red = (255, 59, 48)  # iOS-style red
+    success_green = (52, 199, 89)  # iOS-style green
 
     cell_size = canvas_size / side
     cursor_col = int(cursor_x / cell_size)
@@ -170,9 +173,12 @@ def render_frame(
             is_target = (r, c) == (target_row, target_col) and target_row >= 0
             is_cursor_cell = (r, c) == cursor_cell
             is_error_cell = error_cell is not None and (r, c) == error_cell
+            is_success_cell = success_cell is not None and (r, c) == success_cell
 
             if is_error_cell:
                 fill = error_red
+            elif is_success_cell:
+                fill = success_green
             elif is_cursor_cell and is_target:
                 fill = active_hover_blue
             elif is_cursor_cell:
@@ -184,16 +190,15 @@ def render_frame(
 
             draw.rectangle([x0, y0, x1, y1], fill=fill)
 
-    c = canvas_size / side
-    r = _line_width(side, canvas_size)
+    line_w = _line_width(side, canvas_size)
     for a in range(side + 1):
-        y_center = a * c
-        x_center = a * c
-        y0 = max(0, int(y_center - r / 2))
-        y1 = min(canvas_size, int(y_center + r / 2) + 1)
+        y_center = a * cell_size
+        x_center = a * cell_size
+        y0 = max(0, int(y_center - line_w / 2))
+        y1 = min(canvas_size, int(y_center + line_w / 2) + 1)
         draw.rectangle([0, y0, canvas_size, y1], fill=black)
-        x0 = max(0, int(x_center - r / 2))
-        x1 = min(canvas_size, int(x_center + r / 2) + 1)
+        x0 = max(0, int(x_center - line_w / 2))
+        x1 = min(canvas_size, int(x_center + line_w / 2) + 1)
         draw.rectangle([x0, 0, x1, canvas_size], fill=black)
 
     tip_x, tip_y = cursor_x, cursor_y
@@ -207,11 +212,14 @@ def render_frame(
 
 
 def parse_game_events(history_path: Path, canvas_size: int = DEFAULT_CANVAS_SIZE) -> list[dict]:
-    """Parse history.json to extract game events from tool-result packets.
+    """Parse history.json to extract game events from tool calls and responses.
 
-    Scans tool messages for event field. Returns:
-    - {"type": "start", "ts": int}
-    - {"type": "click", "ts": int | None, "nx": float, "ny": float, "correct": bool}
+    Supports multiple formats:
+    1. targets.json file (preferred - contains target positions without leaking to model)
+    2. Legacy JSON packets in tool responses (structured events)
+    3. Current format: tool_calls in assistant messages + plain text responses
+
+    Returns list of events with cursor positions, target positions, and click info.
     """
     if not history_path.exists():
         return []
@@ -219,9 +227,19 @@ def parse_game_events(history_path: Path, canvas_size: int = DEFAULT_CANVAS_SIZE
     with open(history_path) as f:
         history = json.load(f)
 
-    events = []
+    # Try loading targets.json for target positions (new format - not leaked to model)
+    targets_path = history_path.parent / "targets.json"
+    target_events_from_file: list[dict] = []
+    if targets_path.exists():
+        try:
+            with open(targets_path) as f:
+                target_events_from_file = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
 
-    # Collect screenshot timestamps from user messages (for fallback ts)
+    events: list[dict[str, Any]] = []
+
+    # Collect screenshot timestamps from user messages (for timing)
     screenshot_times = []
     for entry in history:
         if entry.get("role") == "user":
@@ -236,7 +254,7 @@ def parse_game_events(history_path: Path, canvas_size: int = DEFAULT_CANVAS_SIZE
                             if ts is not None:
                                 screenshot_times.append(ts)
 
-    # Scan tool responses for event packets
+    # First, try legacy JSON packet format
     for i, entry in enumerate(history):
         if entry.get("role") != "tool":
             continue
@@ -249,77 +267,296 @@ def parse_game_events(history_path: Path, canvas_size: int = DEFAULT_CANVAS_SIZE
             continue
 
         event_type = packet.get("event")
-        if event_type == "move":
-            pass  # Could use cursor position for smoother GIF trajectory (bonus)
+        cursor = packet.get("cursor", {})
+        target = packet.get("target", {})
 
-        elif event_type == "click":
-            cursor = packet.get("cursor", {})
-            cx = cursor.get("x")
-            cy = cursor.get("y")
-            last_row = packet.get("last_click_row")
-            last_col = packet.get("last_click_col")
-            if cx is not None and cy is not None:
-                nx = float(cx) / canvas_size
-                ny = float(cy) / canvas_size
-            elif last_row is not None and last_col is not None:
-                try:
-                    from .screenshot import cell_center_pixel
-                except ImportError:
-                    from screenshot import cell_center_pixel
+        cx = cursor.get("x")
+        cy = cursor.get("y")
+        if cx is None or cy is None:
+            continue
 
-                side = 8  # Default; create_gif reads from result.json
-                px, py = cell_center_pixel(last_row, last_col, side, canvas_size)
-                nx = float(px) / canvas_size
-                ny = float(py) / canvas_size
-            else:
-                continue
+        target_row = target.get("row")
+        target_col = target.get("col")
 
-            correct = packet.get("correct")
-            if correct is None and "hud" in packet:
-                correct = packet["hud"].get("last_click_correct")
-            if correct is None:
-                correct = False
-
-            ts = packet.get("last_click_time_ms")
-            if ts is None:
-                for j in range(i + 1, min(i + 5, len(history))):
-                    future = history[j]
-                    if future.get("role") != "user":
-                        continue
+        if event_type == "screen" and not events:
+            ts = None
+            for j in range(i + 1, min(i + 5, len(history))):
+                future = history[j]
+                if future.get("role") == "user":
                     fc = future.get("content", [])
-                    if not isinstance(fc, list):
-                        continue
+                    if isinstance(fc, list):
+                        for item in fc:
+                            if isinstance(item, dict) and item.get("type") == "image_url":
+                                url = item.get("image_url", {}).get("url", "")
+                                if ".png" in url:
+                                    fn = url.split("/")[-1] if "/" in url else url
+                                    ts = get_timestamp_ms(fn)
+                                    break
+                    break
+            events.append(
+                {
+                    "type": "start",
+                    "ts": ts or (screenshot_times[0] if screenshot_times else 0),
+                    "cursor_x": cx,
+                    "cursor_y": cy,
+                    "target_row": target_row,
+                    "target_col": target_col,
+                }
+            )
+        elif event_type == "move":
+            events.append(
+                {
+                    "type": "move",
+                    "ts": None,
+                    "cursor_x": cx,
+                    "cursor_y": cy,
+                    "target_row": target_row,
+                    "target_col": target_col,
+                }
+            )
+        elif event_type == "click":
+            events.append(
+                {
+                    "type": "click",
+                    "ts": packet.get("last_click_time_ms"),
+                    "cursor_x": cx,
+                    "cursor_y": cy,
+                    "clicked_row": packet.get("last_click_row"),
+                    "clicked_col": packet.get("last_click_col"),
+                    "new_target_row": target_row,
+                    "new_target_col": target_col,
+                    "correct": packet.get("correct", False),
+                }
+            )
+
+    # If legacy format found events, return them
+    if events:
+        return events
+
+    # Otherwise, parse current format: tool_calls in assistant messages
+    last_ntpm = 0
+    current_target_row = None
+    current_target_col = None
+
+    # Build target update queue from targets.json (if available)
+    # This is the new format where target positions are saved separately (not leaked to model)
+    target_click_queue: list[tuple[int, int]] = []  # [(target_row, target_col), ...] for each click
+    if target_events_from_file:
+        for te in target_events_from_file:
+            if te.get("type") == "start":
+                current_target_row = te.get("target_row")
+                current_target_col = te.get("target_col")
+            elif te.get("type") == "click":
+                # Queue up target positions after each click
+                target_click_queue.append((te.get("target_row", -1), te.get("target_col", -1)))
+    click_queue_idx = 0  # Index into target_click_queue
+
+    # Parse grid size from first tool response: HUD "00:09 ... 30×30" or JSON {"grid_side": 16}
+    grid_side = 30  # default
+    if target_events_from_file:
+        # Get grid_side from targets.json if available
+        for te in target_events_from_file:
+            if te.get("grid_side"):
+                grid_side = te["grid_side"]
+                break
+    for entry in history:
+        if entry.get("role") == "tool":
+            content = entry.get("content", "")
+            if isinstance(content, str) and content.strip().startswith("{"):
+                try:
+                    data = json.loads(content)
+                    grid_side = data.get("grid_side", grid_side)
+                    ok = (
+                        not target_events_from_file
+                        and data.get("target_row", -1) >= 0
+                        and data.get("target_col", -1) >= 0
+                    )
+                    if ok:
+                        current_target_row = data["target_row"]
+                        current_target_col = data["target_col"]
+                except json.JSONDecodeError:
+                    pass
+                break
+            elif isinstance(content, str) and "×" in content:
+                try:
+                    grid_part = content.split("×")[-1].strip()
+                    grid_side = int(grid_part.split()[0]) if grid_part else 30
+                except (ValueError, IndexError):
+                    pass
+                # Only parse target from history if not loaded from targets.json
+                if not target_events_from_file:
+                    target_match = re.search(r"\[T:(\d+),(\d+)\]", content)
+                    if target_match:
+                        current_target_row = int(target_match.group(1))
+                        current_target_col = int(target_match.group(2))
+                break
+
+    cell_size = canvas_size / grid_side
+
+    # Track cursor position (starts at center of cell 0,0, NOT center of canvas)
+    # These will be updated throughout the loop
+    cursor_x = int(cell_size / 2)
+    cursor_y = int(cell_size / 2)
+    _last_cursor_x, _last_cursor_y = cursor_x, cursor_y
+    _last_target_row, _last_target_col = current_target_row, current_target_col
+
+    # Add start event
+    if screenshot_times:
+        events.append(
+            {
+                "type": "start",
+                "ts": screenshot_times[0],
+                "cursor_x": cursor_x,
+                "cursor_y": cursor_y,
+                "target_row": current_target_row,
+                "target_col": current_target_col,
+            }
+        )
+
+    # Build mapping of tool_call_id to function info
+    tool_call_map = {}
+    for entry in history:
+        if entry.get("role") == "assistant":
+            tool_calls = entry.get("tool_calls", [])
+            for tc in tool_calls:
+                tc_id = tc.get("id")
+                func = tc.get("function", {})
+                func_name = func.get("name", "")
+                args_str = func.get("arguments", "{}")
+                try:
+                    args = json.loads(args_str) if isinstance(args_str, str) else (args_str or {})
+                except json.JSONDecodeError:
+                    args = {}
+                tool_call_map[tc_id] = {"name": func_name, "args": args}
+
+    # Process tool responses to build event timeline
+    for i, entry in enumerate(history):
+        if entry.get("role") != "tool":
+            continue
+
+        tc_id = entry.get("tool_call_id")
+        content = entry.get("content", "")
+
+        if tc_id not in tool_call_map:
+            continue
+
+        func_info = tool_call_map[tc_id]
+        func_name = func_info["name"]
+        args = func_info["args"]
+
+        # Get timestamp from next user message's screenshot
+        ts = None
+        for j in range(i + 1, min(i + 5, len(history))):
+            future = history[j]
+            if future.get("role") == "user":
+                fc = future.get("content", [])
+                if isinstance(fc, list):
                     for item in fc:
                         if isinstance(item, dict) and item.get("type") == "image_url":
                             url = item.get("image_url", {}).get("url", "")
-                            if isinstance(url, str) and ".png" in url:
+                            if ".png" in url:
                                 fn = url.split("/")[-1] if "/" in url else url
                                 ts = get_timestamp_ms(fn)
                                 break
-                    if ts is not None:
-                        break
+                break
 
+        # Parse NTPM and target position from content
+        # Formats: HUD "00:17 0.00 BPS -1 NTPM 30×30" | JSON {"ntpm": 1, "correct": true} | "OK"
+        # Note: target position now comes from targets.json (not leaked to model)
+        current_ntpm = last_ntpm
+        parsed_target_row = current_target_row
+        parsed_target_col = current_target_col
+        parsed_correct = None
+
+        if isinstance(content, str) and content.strip().startswith("{"):
+            try:
+                data = json.loads(content)
+                current_ntpm = data.get("ntpm", last_ntpm)
+                ok = (
+                    not target_events_from_file
+                    and data.get("target_row", -1) >= 0
+                    and data.get("target_col", -1) >= 0
+                )
+                if ok:
+                    parsed_target_row = data["target_row"]
+                    parsed_target_col = data["target_col"]
+                parsed_correct = data.get("correct")
+            except json.JSONDecodeError:
+                pass
+        elif isinstance(content, str):
+            ntpm_match = re.search(r"(-?\d+)\s*NTPM", content)
+            if ntpm_match:
+                current_ntpm = int(ntpm_match.group(1))
+            # Only parse target from history if not using targets.json (legacy support)
+            if not target_events_from_file:
+                target_match = re.search(r"\[T:(\d+),(\d+)\]", content)
+                if target_match:
+                    parsed_target_row = int(target_match.group(1))
+                    parsed_target_col = int(target_match.group(2))
+
+        if func_name == "mouse_move":
+            dx = args.get("dx", 0)
+            dy = args.get("dy", 0)
+            cursor_x = max(0, min(canvas_size - 1, cursor_x + dx))
+            cursor_y = max(0, min(canvas_size - 1, cursor_y + dy))
+            # Update current target from parsed value (only if not using targets.json)
+            if not target_events_from_file and parsed_target_row is not None:
+                current_target_row = parsed_target_row
+                current_target_col = parsed_target_col
+            events.append(
+                {
+                    "type": "move",
+                    "ts": ts,
+                    "cursor_x": cursor_x,
+                    "cursor_y": cursor_y,
+                    "target_row": current_target_row,
+                    "target_col": current_target_col,
+                }
+            )
+
+        elif func_name == "mouse_click":
+            # Use explicit correct flag from JSON, or infer from NTPM change for legacy HUD format
+            correct = parsed_correct if parsed_correct is not None else (current_ntpm > last_ntpm)
+            # Store the target BEFORE click (what was clicked)
+            clicked_target_row = current_target_row
+            clicked_target_col = current_target_col
+            # Update to new target AFTER click
+            if target_click_queue and click_queue_idx < len(target_click_queue):
+                # Use target from targets.json (preferred)
+                current_target_row, current_target_col = target_click_queue[click_queue_idx]
+                click_queue_idx += 1
+            elif parsed_target_row is not None:
+                # Fall back to parsing from history (legacy support)
+                current_target_row = parsed_target_row
+                current_target_col = parsed_target_col
             events.append(
                 {
                     "type": "click",
                     "ts": ts,
-                    "nx": nx,
-                    "ny": ny,
+                    "cursor_x": cursor_x,
+                    "cursor_y": cursor_y,
+                    "clicked_row": int(cursor_y / cell_size),
+                    "clicked_col": int(cursor_x / cell_size),
+                    "target_before_click_row": clicked_target_row,
+                    "target_before_click_col": clicked_target_col,
+                    "new_target_row": current_target_row,
+                    "new_target_col": current_target_col,
                     "correct": correct,
                 }
             )
+            last_ntpm = current_ntpm
 
-    # Prepend start event
-    if screenshot_times:
-        events.insert(
-            0,
-            {
-                "type": "start",
-                "ts": screenshot_times[0],
-                "target_row": None,
-                "target_col": None,
-            },
-        )
+        elif func_name == "screen":
+            # Screen calls also update target position (only if not using targets.json)
+            if not target_events_from_file and parsed_target_row is not None:
+                current_target_row = parsed_target_row
+                current_target_col = parsed_target_col
+            # Update start event if it exists and has no target
+            if events and events[0]["type"] == "start" and events[0].get("target_row") is None:
+                events[0]["target_row"] = current_target_row
+                events[0]["target_col"] = current_target_col
+
+        last_ntpm = current_ntpm
 
     return events
 
@@ -367,16 +604,44 @@ def create_gif(
     events = parse_game_events(history_path, canvas_size)
 
     if not events:
+        # Debug: check what's in the history
+        if history_path.exists():
+            with open(history_path) as f:
+                history = json.load(f)
+            print(f"DEBUG: History has {len(history)} entries")
+            roles_list = [e.get("role") for e in history]
+            role_counts = {r: roles_list.count(r) for r in set(roles_list)}
+            print(f"DEBUG: Roles: {role_counts}")
+            tool_entries = [e for e in history if e.get("role") == "tool"]
+            print(f"DEBUG: Tool entries: {len(tool_entries)}")
+            if tool_entries:
+                print(f"DEBUG: First tool content: {tool_entries[0].get('content', '')[:100]}")
         raise ValueError(f"No game events found in {history_path}")
 
     # Extract click events with timestamps
-    clicks = [e for e in events if e["type"] == "click" and e["ts"] is not None]
+    clicks = [e for e in events if e["type"] == "click" and e.get("ts") is not None]
+
+    # Debug: show parsed events
+    print(f"DEBUG: Parsed {len(events)} events:")
+    for e in events:
+        if e["type"] == "click":
+            print(
+                f"  CLICK: ts={e.get('ts')}, pos=({e.get('cursor_x')}, {e.get('cursor_y')}), "
+                f"cell=({e.get('clicked_row')}, {e.get('clicked_col')}), correct={e.get('correct')}"
+            )
+        elif e["type"] == "move":
+            print(f"  MOVE: ts={e.get('ts')}, pos=({e.get('cursor_x')}, {e.get('cursor_y')})")
+        elif e["type"] == "start":
+            print(f"  START: ts={e.get('ts')}, pos=({e.get('cursor_x')}, {e.get('cursor_y')})")
 
     if not clicks:
         raise ValueError("No click events with timestamps found")
 
+    # Get start event
+    start_event = events[0] if events and events[0]["type"] == "start" else None
+
     # Calculate timing
-    start_ts = events[0]["ts"] if events[0]["ts"] else 0
+    start_ts = start_event["ts"] if start_event and start_event["ts"] else 0
     end_ts = clicks[-1]["ts"]
     real_time_ms = end_ts - start_ts
     gif_duration_ms = real_time_ms / speed
@@ -386,137 +651,138 @@ def create_gif(
     print(f"Building {total_frames} frames at {fps} fps...")
     print(f"  Events: {len(events)} ({len(clicks)} clicks)")
 
-    # Build cursor position timeline
-    # Cursor moves from click to click
+    # Build cursor position timeline from actual game events
+    # Use actual timestamps for time-proportional movement speed
     cursor_timeline = []
 
-    # Start position (top-left of first target cell or center of grid)
-    if clicks:
-        first_click = clicks[0]
-        # Use cell center of first click as starting position
-        px, py = normalized_to_pixel(first_click["nx"], first_click["ny"], canvas_size)
+    # Start with initial cursor position from start event
+    if start_event:
         cursor_timeline.append(
             {
                 "ts": start_ts,
-                "x": px,
-                "y": py,
+                "x": start_event.get("cursor_x", 8),
+                "y": start_event.get("cursor_y", 8),
             }
         )
 
-        for click in clicks:
-            px, py = normalized_to_pixel(click["nx"], click["ny"], canvas_size)
+    # Add move and click events to cursor timeline using actual timestamps
+    # Movement speed will be proportional to time elapsed between events
+    for i, event in enumerate(events):
+        if event["type"] == "move":
+            event_ts = event.get("ts")
+            if event_ts is not None:
+                # Use actual timestamp - movement will be time-proportional
+                # If next event is a click at same/close timestamp, place move slightly before
+                next_event_ts = None
+                for j in range(i + 1, len(events)):
+                    if events[j].get("ts") is not None:
+                        next_event_ts = events[j]["ts"]
+                        break
+                # If move and next event have same timestamp, offset move by 100ms before
+                if next_event_ts is not None and abs(event_ts - next_event_ts) < 50:
+                    event_ts = next_event_ts - 100
+                cursor_timeline.append(
+                    {
+                        "ts": event_ts,
+                        "x": event["cursor_x"],
+                        "y": event["cursor_y"],
+                    }
+                )
+        elif event["type"] == "click" and event.get("ts"):
             cursor_timeline.append(
                 {
-                    "ts": click["ts"],
-                    "x": px,
-                    "y": py,
+                    "ts": event["ts"],
+                    "x": event["cursor_x"],
+                    "y": event["cursor_y"],
                 }
             )
 
-    # Build target timeline by detecting targets from screenshots
-    # Each screenshot shows where the target was at that moment
+    # Sort cursor timeline by timestamp
+    cursor_timeline.sort(key=lambda x: x["ts"])
+
+    # Build target timeline from game events
+    # Target is shown from start until first click, then changes after each click
     target_timeline = []
 
-    # Get all screenshot files sorted by timestamp
-    screenshot_files = []
-    for f in eval_path.glob("*.png"):
-        ts = get_timestamp_ms(f.name)
-        if ts is not None:
-            screenshot_files.append((ts, f))
-    screenshot_files.sort(key=lambda x: x[0])
-
-    # Detect target from each screenshot
-    screenshot_targets = []
-    for ts, path in screenshot_files:
-        target = detect_target_from_screenshot(path, grid_side)
-        if target:
-            screenshot_targets.append({"ts": ts, "target_row": target[0], "target_col": target[1]})
-
-    # Build target timeline from detected positions
-    # Target stays until it's clicked correctly (which means it changes)
-    prev_target = None
-    prev_ts = start_ts if screenshot_targets else start_ts
-
-    for i, st in enumerate(screenshot_targets):
-        current_target = (st["target_row"], st["target_col"])
-
-        if prev_target is None:
-            # First target
-            prev_target = current_target
-            prev_ts = st["ts"]
-        elif current_target != prev_target:
-            # Target changed - previous target was valid until now
-            target_timeline.append(
-                {
-                    "start_ts": prev_ts,
-                    "end_ts": st["ts"],
-                    "target_row": prev_target[0],
-                    "target_col": prev_target[1],
-                }
-            )
-            prev_target = current_target
-            prev_ts = st["ts"]
-
-    # Add the last target (valid until end of animation)
-    if prev_target and screenshot_files:
-        end_ts = screenshot_files[-1][0] + 1000  # Extend 1 second past last screenshot
+    # Initial target from start event
+    if start_event and start_event.get("target_row") is not None:
+        # Find when this target ends (first click)
+        first_click_ts = clicks[0]["ts"] if clicks else end_ts
         target_timeline.append(
             {
-                "start_ts": prev_ts,
-                "end_ts": end_ts,
-                "target_row": prev_target[0],
-                "target_col": prev_target[1],
+                "start_ts": start_ts,
+                "end_ts": first_click_ts,
+                "target_row": start_event["target_row"],
+                "target_col": start_event["target_col"],
             }
         )
 
-    print(
-        f"  Targets detected: {len(target_timeline)} periods from {len(screenshot_targets)} screenshots"
-    )
+    # After each click, show the new target until the next click
+    for i, click in enumerate(clicks):
+        if click.get("new_target_row") is not None:
+            next_click_ts = clicks[i + 1]["ts"] if i + 1 < len(clicks) else end_ts + 1000
+            target_timeline.append(
+                {
+                    "start_ts": click["ts"],
+                    "end_ts": next_click_ts,
+                    "target_row": click["new_target_row"],
+                    "target_col": click["new_target_col"],
+                }
+            )
 
-    # Track incorrect clicks separately for red flash
-    incorrect_clicks = [c for c in clicks if c.get("correct") == False]
+    print(f"  Target periods: {len(target_timeline)}")
+
+    # Separate correct and incorrect clicks for visual feedback
+    incorrect_clicks = [c for c in clicks if c.get("correct") is False]
+    correct_clicks = [c for c in clicks if c.get("correct") is True]
+
+    # Flash duration in real-time ms (will be shown shorter in sped-up GIF)
+    # At 10x speed and 24fps, 500ms real = 50ms GIF = ~1.2 frames
+    # Use 800ms to ensure at least 2 frames show the flash
+    click_flash_duration_ms = 800
 
     # Generate frames
     frames = []
     frame_duration_int = int(frame_duration_ms)
-
-    # Track game state for rendering
-    current_target_row = grid_side // 2  # Default to center
-    current_target_col = grid_side // 2
-    last_click_incorrect = False
-    incorrect_flash_until = 0
 
     for frame_idx in range(total_frames):
         gif_time_ms = frame_idx * frame_duration_ms
         real_time_target = start_ts + (gif_time_ms * speed)
 
         # Find cursor position by interpolating between timeline points
-        cursor_x, cursor_y = 10, 10  # Default
+        # Default to center of cell (0, 0)
+        cell_size = canvas_size / grid_side
+        cursor_x, cursor_y = int(cell_size / 2), int(cell_size / 2)
 
-        for i in range(len(cursor_timeline) - 1):
-            curr = cursor_timeline[i]
-            next_ = cursor_timeline[i + 1]
-
-            if curr["ts"] <= real_time_target < next_["ts"]:
-                # Interpolate between these points
-                duration = next_["ts"] - curr["ts"]
-                if duration > 0:
-                    progress = (real_time_target - curr["ts"]) / duration
-                    progress = min(1, max(0, progress))
-                    cursor_x, cursor_y = interpolate_position(
-                        curr["x"], curr["y"], next_["x"], next_["y"], progress
-                    )
-                else:
-                    cursor_x, cursor_y = next_["x"], next_["y"]
-                break
+        if cursor_timeline:
+            # Before first point
+            if real_time_target <= cursor_timeline[0]["ts"]:
+                cursor_x = cursor_timeline[0]["x"]
+                cursor_y = cursor_timeline[0]["y"]
+            # After last point
             elif real_time_target >= cursor_timeline[-1]["ts"]:
-                # After last point
                 cursor_x = cursor_timeline[-1]["x"]
                 cursor_y = cursor_timeline[-1]["y"]
-                break
+            else:
+                # Interpolate between points
+                for i in range(len(cursor_timeline) - 1):
+                    curr = cursor_timeline[i]
+                    next_ = cursor_timeline[i + 1]
+
+                    if curr["ts"] <= real_time_target < next_["ts"]:
+                        duration = next_["ts"] - curr["ts"]
+                        if duration > 0:
+                            progress = (real_time_target - curr["ts"]) / duration
+                            progress = min(1, max(0, progress))
+                            px, py = interpolate_position(
+                                curr["x"], curr["y"], next_["x"], next_["y"], progress
+                            )
+                            cursor_x, cursor_y = int(px), int(py)
+                        else:
+                            cursor_x, cursor_y = next_["x"], next_["y"]
+                        break
 
         # Find which target is active at this time
-        # Target is visible from start_ts to end_ts
         current_target_row = -1  # No target by default
         current_target_col = -1
         for target in target_timeline:
@@ -525,16 +791,24 @@ def create_gif(
                 current_target_col = target["target_col"]
                 break
 
-        # Check for incorrect click flash (200ms duration)
-        # The clicked cell flashes red
+        # Check for click flash (green for correct, red for incorrect)
         error_cell = None
+        success_cell = None
+
+        # Check incorrect clicks - red flash
         for click in incorrect_clicks:
             ts = click["ts"]
-            if ts <= real_time_target < ts + 200:
-                # Flash the cell that was incorrectly clicked
-                row, col = normalized_to_cell(click["nx"], click["ny"], grid_side)
-                error_cell = (row, col)
+            if ts <= real_time_target < ts + click_flash_duration_ms:
+                error_cell = (click["clicked_row"], click["clicked_col"])
                 break
+
+        # Check correct clicks - green flash (only if no error)
+        if error_cell is None:
+            for click in correct_clicks:
+                ts = click["ts"]
+                if ts <= real_time_target < ts + click_flash_duration_ms:
+                    success_cell = (click["clicked_row"], click["clicked_col"])
+                    break
 
         # Render frame
         frame = render_frame(
@@ -544,6 +818,7 @@ def create_gif(
             cursor_y=int(cursor_y),
             side=grid_side,
             error_cell=error_cell,
+            success_cell=success_cell,
             canvas_size=canvas_size,
         )
         frames.append(frame)
@@ -579,6 +854,7 @@ def create_gif(
 
 
 def main() -> None:
+    """CLI entrypoint: parse args and generate replay GIF from eval dir."""
     parser = argparse.ArgumentParser(description="Create animated GIF with smooth cursor movement")
     parser.add_argument(
         "eval_dir",

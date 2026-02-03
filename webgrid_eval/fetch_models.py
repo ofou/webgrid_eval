@@ -3,6 +3,7 @@
 import json
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import yaml  # Add this import; install via pip if needed
 
@@ -19,7 +20,10 @@ def _fetch_openrouter(base_url: str) -> list[str]:
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode())
     models = data.get("data", [])
-    supported = lambda m: m.get("supported_parameters") or []
+
+    def supported(m: dict[str, Any]) -> list[Any]:
+        return m.get("supported_parameters") or []
+
     image_tools = [
         m["id"]
         for m in models
@@ -35,14 +39,15 @@ def _fetch_local(base_url: str) -> list[str]:
     req = urllib.request.Request(base_url)
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode())
-    # Adjust based on actual API response structure; this assumes a list of models with 'name' or 'id'
-    models = data.get("data", [])  # or data.get("models", []) depending on the API
+    # Adjust based on actual API response structure; assumes list of models with 'name' or 'id'
+    models = data.get("data", [])
     model_ids = [m.get("id") or m.get("name") for m in models]
     model_ids.sort()
     return model_ids
 
 
 def update_yaml(yaml_path: Path, model_ids: list[str]) -> None:
+    """Update YAML file with given model_ids in the options key."""
     # Load existing YAML safely
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
@@ -58,6 +63,7 @@ def update_yaml(yaml_path: Path, model_ids: list[str]) -> None:
 
 
 def main() -> None:
+    """Fetch local and OpenRouter models and update YAML files."""
     local_model_ids = _fetch_local(LOCAL_URL)
     openrouter_model_ids = _fetch_openrouter(OPENROUTER_URL)
     print(local_model_ids)

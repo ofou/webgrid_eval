@@ -30,6 +30,7 @@ def _recalculate_results_json(results_dir: Path) -> None:
 
 
 def main() -> None:
+    """CLI entrypoint: load YAML, POST to eval API, print results."""
     parser = argparse.ArgumentParser(description="Run webgrid eval from models YAML")
     parser.add_argument(
         "models_yaml",
@@ -73,7 +74,7 @@ def main() -> None:
         sys.exit(1)
 
     eval_api_base = data.get("eval_api_base") or data.get("server_url") or "http://127.0.0.1:8000"
-    # Send models_file so the server loads the same YAML (single source of truth for openrouter/local)
+    # Send models_file so server loads same YAML (single source of truth)
     models_file_str = str(yaml_path)
     body = {
         "models_file": models_file_str,
@@ -111,8 +112,8 @@ def main() -> None:
     results_dir = Path("results")
     results_dir.mkdir(parents=True, exist_ok=True)
     results = out.get("results") or []
-    # Use API response (includes successes + error entries); write so results.json is up to date
-    (results_dir / "results.json").write_text(json.dumps({"results": results}, indent=2))
+    # Aggregate all results from subdirectories (includes all previous runs)
+    _recalculate_results_json(results_dir)
     print(json.dumps({"results": results}, indent=2))
     for r in sorted(results, key=lambda x: (x.get("error") is not None, -x["score"], -x["ntpm"])):
         if r.get("error"):
@@ -120,7 +121,8 @@ def main() -> None:
             print(f" {r['model']}: failed — {err[:80]}{'...' if len(err) > 80 else ''}")
         else:
             print(
-                f" {r['model']}: BPS={r['bps']:.2f}, NTPM={r['ntpm']:.1f}, score={r['score']}, incorrect={r['incorrect']}"
+                f" {r['model']}: BPS={r['bps']:.2f}, NTPM={r['ntpm']:.1f}, "
+                f"score={r['score']}, incorrect={r['incorrect']}"
             )
 
 

@@ -36,7 +36,7 @@ For comparison: Neuralink's eighth clinical trial participant achieved 10.39 BPS
 The goal is to click targets on the grid as quickly as possible while minimizing misclicks. Score is measured in bits per second (BPS), derived from net correct clicks (NTPM) and grid size.
 
 - **NTPM**: Net correct clicks = correct - incorrect
-- **BPS**: (NTPM / 60) * log2(grid_size^2 - 1) for 30x30; BPS = 0 when NTPM <= 0
+- **BPS**: (NTPM / 60) * log2(N) where N = grid cells (e.g., 900 for 30×30); BPS = 0 when NTPM <= 0
 
 </details>
 

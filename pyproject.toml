@@ -35,6 +35,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+    "playwright>=1.40.0",
+]
+browserbase = [
+    "playwright>=1.40.0",
+    "browserbase>=1.0.0",
+]
+stagehand = [
+    "stagehand>=3.4.0",
+    "python-dotenv>=1.0.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -47,6 +58,8 @@ dev = [
 
 [project.scripts]
 webgrid-eval = "webgrid_eval.run_eval:main"
+webgrid-browser = "webgrid_eval.browser_eval:main"
+webgrid-stagehand = "webgrid_eval.stagehand_agent:main"
 webgrid-gif = "webgrid_eval.make_gif:main"
 
 [project.urls]
@@ -106,6 +119,9 @@ ignore = [
 [tool.ruff.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D", "E501", "B007", "E731"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
@@ -114,6 +130,11 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

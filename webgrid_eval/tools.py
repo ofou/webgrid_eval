@@ -14,7 +14,7 @@ from .screenshot import (
 )
 
 
-def _get_max_xy(state) -> int:
+def _get_max_xy(state: Any) -> int:
     """Get max pixel coordinate based on state's canvas_size."""
     return getattr(state, "canvas_size", DEFAULT_CANVAS_SIZE) - 1
 
@@ -26,14 +26,14 @@ def _clamp(v: int, lo: int, hi: int) -> int:
     return lo if v < lo else hi if v > hi else v
 
 
-def _ensure_cursor_pixel(state) -> None:
+def _ensure_cursor_pixel(state: Any) -> None:
     if getattr(state, "cursor_x", None) is None or getattr(state, "cursor_y", None) is None:
         canvas_size = getattr(state, "canvas_size", DEFAULT_CANVAS_SIZE)
         cx, cy = cell_center_pixel(state.cursor_row, state.cursor_col, state.grid_side, canvas_size)
         state.cursor_x, state.cursor_y = cx, cy
 
 
-def _set_cursor_pixel(state, x: int, y: int) -> None:
+def _set_cursor_pixel(state: Any, x: int, y: int) -> None:
     max_xy = _get_max_xy(state)
     x = _clamp(x, 0, max_xy)
     y = _clamp(y, 0, max_xy)
@@ -43,7 +43,7 @@ def _set_cursor_pixel(state, x: int, y: int) -> None:
     state.cursor_x, state.cursor_y = x, y
 
 
-def _hud(state, last_click: bool | None = None) -> dict[str, Any]:
+def _hud(state: Any, last_click: bool | None = None) -> dict[str, Any]:
     elapsed_ms = (
         (time.time() - state.start_time) * 1000
         if getattr(state, "start_time", None) is not None
@@ -55,7 +55,7 @@ def _hud(state, last_click: bool | None = None) -> dict[str, Any]:
     ntpm = float(net)
     bps = 0.0
     if net > 0:
-        bps = (net / 60.0) * math.log2(state.grid_size**2 - 1)
+        bps = (net / 60.0) * math.log2(state.grid_size)
     return {
         "time": f"{mm:02d}:{ss:02d}",
         "bps": bps,
@@ -65,7 +65,27 @@ def _hud(state, last_click: bool | None = None) -> dict[str, Any]:
     }
 
 
-def _packet(state, last_click: bool | None = None) -> dict[str, Any]:
+def _hud_line(state: Any) -> str:
+    """Return a compact HUD string (no target position - that would leak the answer to the model).
+
+    Format: 'MM:SS X.XX BPS N NTPM WxH'
+    """
+    elapsed_ms = (
+        (time.time() - state.start_time) * 1000
+        if getattr(state, "start_time", None) is not None
+        else 0
+    )
+    t_s = int(elapsed_ms // 1000)
+    mm, ss = t_s // 60, t_s % 60
+    net = state.score - state.incorrect_count
+    bps = 0.0
+    if net > 0:
+        bps = (net / 60.0) * math.log2(state.grid_size)
+
+    return f"{mm:02d}:{ss:02d} {bps:.2f} BPS {net} NTPM {state.grid_side}×{state.grid_side}"
+
+
+def _packet(state: Any, last_click: bool | None = None) -> dict[str, Any]:
     _ensure_cursor_pixel(state)
     canvas_size = getattr(state, "canvas_size", DEFAULT_CANVAS_SIZE)
     return {
@@ -85,17 +105,16 @@ def _packet(state, last_click: bool | None = None) -> dict[str, Any]:
     }
 
 
-def _img_message(b64: str, save_path: str | None) -> dict[str, Any]:
-    msg = {
-        "role": "user",
-        "content": [
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
-            },
-            # TODO: add the time and score to the message
-        ],
-    }
+def _img_message(b64: str, save_path: str | None, hud_text: str | None = None) -> dict[str, Any]:
+    content: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        },
+    ]
+    if hud_text:
+        content.append({"type": "text", "text": hud_text})
+    msg: dict[str, Any] = {"role": "user", "content": content}
     if save_path:
         msg["_screenshot_filename"] = os.path.basename(save_path)
     return msg
@@ -124,7 +143,7 @@ TOOLS_MOUSELIKE = [
         "type": "function",
         "function": {
             "name": "mouse_move",
-            "description": "Move cursor by relative mouse deltas (dx, dy). Positive dx=right, positive dy=down.",
+            "description": "Move cursor by (dx, dy). Positive dx=right, dy=down.",
             "strict": True,
             "parameters": {
                 "type": "object",
@@ -160,20 +179,19 @@ TOOLS_OPENAI = TOOLS_MOUSELIKE
 def execute_tool(
     name: str,
     arguments: dict[str, Any],
-    state,
+    state: Any,
     screen_save_path: str | None = None,
     click_save_path: str | None = None,
 ) -> tuple[str, list[dict] | None]:
+    """Execute one tool (screen, mouse_move, mouse_click) and return (content, extra_messages)."""
     _ensure_cursor_pixel(state)
 
     if name == "screen":
-        pkt = _packet(state, last_click=None)
-        pkt["event"] = "screen"
         b64 = render_grid_screenshot(state, save_path=screen_save_path)
-        # todo: add the time and score to the packet
+        hud = _hud_line(state)
         return (
-            json.dumps(pkt, separators=(",", ":")),
-            [_img_message(b64, screen_save_path)],
+            hud,
+            [_img_message(b64, screen_save_path, hud)],
         )
 
     if name == "mouse_move":
@@ -189,9 +207,9 @@ def execute_tool(
         new_y = state.cursor_y + dy
         _set_cursor_pixel(state, new_x, new_y)
 
-        pkt = _packet(state, last_click=None)
-        pkt["event"] = "move"
-        return json.dumps(pkt, separators=(",", ":")), None
+        # Return screenshot after move for visual feedback (like Neuralink)
+        b64 = render_grid_screenshot(state, save_path=screen_save_path)
+        return "OK", [_img_message(b64, screen_save_path, None)]
 
     if name == "mouse_click":
         assert state.cursor_x is not None and state.cursor_y is not None
@@ -201,20 +219,19 @@ def execute_tool(
 
         correct, _data = state.click_at(row, col)
 
-        pkt = _packet(state, last_click=bool(correct))
-        pkt["event"] = "click"
-        pkt["correct"] = correct
-        pkt["last_click_row"] = state.last_click_row
-        pkt["last_click_col"] = state.last_click_col
-        pkt["last_click_correct"] = state.last_click_correct
-        pkt["last_click_time_ms"] = state.last_click_time_ms
-
         b64 = render_grid_screenshot(
             state, save_path=click_save_path, last_click_incorrect=not correct
         )
+        content = json.dumps(
+            {
+                "correct": correct,
+                "ntpm": state.score - state.incorrect_count,
+                "grid_side": state.grid_side,
+            }
+        )
         return (
-            json.dumps(pkt, separators=(",", ":")),
-            [_img_message(b64, click_save_path)],
+            content,
+            [_img_message(b64, click_save_path, hud_text=None)],
         )
 
     return f"Unknown tool: {name}", None

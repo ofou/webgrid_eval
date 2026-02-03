@@ -15,6 +15,7 @@ import base64
 import io
 import math
 import os
+from typing import Any
 
 import cairosvg
 from PIL import Image, ImageDraw
@@ -73,7 +74,7 @@ def _get_cell_rect(row: int, col: int, side: int, canvas_size: int) -> tuple[int
 def pixel_to_cell(
     x: int, y: int, side: int, canvas_size: int = DEFAULT_CANVAS_SIZE
 ) -> tuple[int, int]:
-    """Convert pixel (x, y) to grid cell (row, col). Same as Neuralink: col = floor(px/cellSize), row = floor(py/cellSize), cellSize = canvas_size/side."""
+    """Convert pixel (x, y) to grid cell (row, col). col=floor(px/cs), row=floor(py/cs)."""
     cell_size = canvas_size / side
     col = math.floor(x / cell_size)
     row = math.floor(y / cell_size)
@@ -85,7 +86,7 @@ def pixel_to_cell(
 def cell_center_pixel(
     row: int, col: int, side: int, canvas_size: int = DEFAULT_CANVAS_SIZE
 ) -> tuple[int, int]:
-    """Return pixel (x, y) at the center of cell (row, col). Use for snap-to-center and cursor tracking."""
+    """Return pixel (x, y) at center of cell (row, col). For snap-to-center and cursor tracking."""
     cell_size = canvas_size / side
     x = int((col + 0.5) * cell_size)
     y = int((row + 0.5) * cell_size)
@@ -104,13 +105,13 @@ def normalized_to_cell(
 
 
 def render_grid_screenshot(
-    state,
+    state: Any,
     save_path: str | None = None,
     last_click_incorrect: bool = False,
 ) -> str:
-    """Draw grid matching Neuralink Webgrid: canvas_size x canvas_size, K=0.002 lines, rgb(10,132,255) target.
+    """Draw grid matching Neuralink Webgrid: canvas_size x canvas_size, target rgb(10,132,255).
 
-    Canvas size is read from state.canvas_size (default: 256).
+    Canvas size from state.canvas_size (default: 256).
     """
     side = state.grid_side
     # Get canvas_size from state, fallback to default for backward compatibility
@@ -188,8 +189,8 @@ def render_grid_screenshot(
     cur_img, hx, hy = _load_cursor()
     px = tip_x - hx
     py = tip_y - hy
-    r, g, b, a = cur_img.split()
-    img.paste(cur_img.convert("RGB"), (px, py), a)
+    _r, _g, _b, alpha_mask = cur_img.split()
+    img.paste(cur_img.convert("RGB"), (px, py), alpha_mask)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")

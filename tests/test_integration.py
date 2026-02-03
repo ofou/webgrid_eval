@@ -356,7 +356,7 @@ class TestAPIWithActualHTTP(unittest.TestCase):
         # Wait for server to start
         cls.base_url = "http://127.0.0.1:8001"
         max_retries = 30
-        for i in range(max_retries):
+        for _i in range(max_retries):
             try:
                 response = requests.get(f"{cls.base_url}/health", timeout=1)
                 if response.status_code == 200:

@@ -40,7 +40,7 @@ class TestComputeNTPMBPS:
 
         net = correct - incorrect  # 8
         assert ntpm == float(net)
-        expected_bps = (net / 60.0) * math.log2(grid_size**2 - 1)
+        expected_bps = (net / 60.0) * math.log2(grid_size)
         assert abs(bps - expected_bps) < 0.01
 
     def test_compute_zero_net(self):
