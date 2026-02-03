@@ -123,12 +123,12 @@ If you use this software in your research, please cite:
 
 ```bibtex
 @software{Olivares_Urrutia_Webgrid_Eval_Benchmark_2026,
-author = {Olivares Urrutia, Omar},
-month = feb,
-title = {{Webgrid Eval: Benchmark for LLM Vision and Tool-Use Capabilities}},
-url = {https://github.com/ofou/webgrid_eval},
-version = {0.1.0},
-year = {2026}
+  author  = {Olivares Urrutia, Omar},
+  title   = {{Webgrid Eval: Benchmark for LLM Vision and Tool-Use Capabilities}},
+  year    = {2026},
+  month   = {feb},
+  url     = {https://github.com/ofou/webgrid_eval},
+  version = {0.1.0}
 }
 ```
 
