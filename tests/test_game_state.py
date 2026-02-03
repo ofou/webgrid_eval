@@ -109,7 +109,7 @@ class TestMetrics:
         net = correct - incorrect
         if net > 0:
             bps = (net / 60.0) * math.log2(grid_size)
-            expected = (8 / 60.0) * math.log2(4095)
+            expected = (8 / 60.0) * math.log2(64)  # grid_size, not grid_size² - 1
             assert abs(bps - expected) < 0.01
 
 

@@ -16,12 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import cairosvg
-
-try:
-    from PIL import Image, ImageDraw
-except ImportError:
-    Image = None
-    ImageDraw = None
+from PIL import Image, ImageDraw
 
 CURSOR_VIEWBOX = 32
 CURSOR_HOTSPOT_XY = (10, 16)
@@ -87,6 +82,8 @@ def detect_target_from_screenshot(img_path: Path, side: int) -> tuple[int, int] 
 
     img = Image.open(img_path)
     pixels = img.load()
+    if pixels is None:
+        return None
     canvas_size = img.width  # Get actual size from image
     cell_size = canvas_size / side
 

@@ -342,8 +342,10 @@ class TestExecuteTool:
 
         assert result == "OK"
 
-        # No image messages for move
-        assert messages is None
+        # Returns screenshot after move for visual feedback (like Neuralink)
+        assert messages is not None
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
 
     def test_execute_mouse_move_invalid_args(self):
         """Test mouse_move with invalid arguments."""
