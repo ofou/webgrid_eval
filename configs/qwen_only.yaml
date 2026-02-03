@@ -1,0 +1,8 @@
+base_url: http://localhost:1234/
+eval_api_base: http://127.0.0.1:8000
+grid_size: 64
+canvas_size: 256
+max_images: 1
+max_seconds: 70
+models:
+- qwen/qwen3-vl-8b

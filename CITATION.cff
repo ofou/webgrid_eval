@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Webgrid Eval: Benchmark for LLM Vision and Tool-Use Capabilities"
+version: 0.1.0
+date-released: 2025-02-02
+url: "https://github.com/yourusername/webgrid_eval"
+repository-code: "https://github.com/yourusername/webgrid_eval"
+license: MIT
+keywords:
+  - llm
+  - evaluation
+  - benchmark
+  - vision
+  - tool-use
+  - neuralink
+  - webgrid
+authors:
+  - family-names: "Olivares Urrutia"
+    given-names: "Omar"
+    email: "omar@olivares.cl"
+type: software
+abstract: "Webgrid Eval is an open-source framework for benchmarking Large Language Model vision understanding and tool-use capabilities through Neuralink's Webgrid cursor control task."
