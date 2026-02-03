@@ -10,10 +10,14 @@ Benchmark LLM vision + tool-use capabilities on Neuralink's cursor control task.
 
 At Neuralink, a game called [Webgrid](https://neuralink.com/webgrid) tests how precisely users can control a cursor. This benchmark evaluates LLMs on the same task: the model sees a screenshot of a grid with one blue target cell and uses tools (`screen`, `mouse_move`, `mouse_click`) to navigate the cursor to the target and click.
 
-### Example Replay (1x)
+### Example Replay
 
-![google/gemini-3-flash-preview at 1x speed](./docs/img/gemini-3-flash-preview.gif)
-*google/gemini-3-flash-preview on 30×30 grid — 4 correct, 3 misclicks, 0.16 BPS (1 NTPM), in 70s task*
+<!-- markdownlint-disable MD033 -->
+<figure align="center">
+  <img src="./docs/img/gemini-3-flash-preview.gif" alt="gemini-3-flash-preview at 1x speed" width="400">
+  <figcaption>gemini-3-flash-preview on 30×30 grid — 4 correct, 3 misclicks, 0.16 BPS (1 NTPM), in 70s task</figcaption>
+</figure>
+<!-- markdownlint-enable MD033 -->
 
 ### Human Baseline
 
