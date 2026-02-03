@@ -15,7 +15,7 @@ At Neuralink, a game called [Webgrid](https://neuralink.com/webgrid) tests how p
 <!-- markdownlint-disable MD033 -->
 <figure align="center">
   <img src="./docs/img/gemini-3-flash-preview.gif" alt="gemini-3-flash-preview at 1x speed" width="400">
-  <figcaption>gemini-3-flash-preview on 30×30 grid — 4 correct, 3 misclicks, 0.16 BPS (1 NTPM), in 70s task</figcaption>
+  <figcaption><em>gemini-3-flash-preview on 30×30 grid — 4 correct, 3 misclicks, 0.16 BPS (1 NTPM), in 70s task</em></figcaption>
 </figure>
 <!-- markdownlint-enable MD033 -->
 
