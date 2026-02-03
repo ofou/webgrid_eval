@@ -1,5 +1,5 @@
 base_url: https://generativelanguage.googleapis.com/v1beta/openai
-api_key: AIzaSyC5AZzdt-XT2C_nqG28TbKOEqPLjBN6Jug
+api_key: AIzaSyC5AZzdt-... (your API key)
 grid_size: 900
 canvas_size: 900
 max_seconds: 70
