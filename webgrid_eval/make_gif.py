@@ -2,7 +2,7 @@
 
 Usage: python -m webgrid_eval.make_gif [eval_dir] [--speed 1] [--fps 30]
 
-When no eval_dir is provided, processes all subdirectories under results/ recursively.
+When no eval_dir is provided, processes all subdirectories under eval/ recursively.
 
 Renders the game grid from history.json, animating cursor movement between clicks.
 Does NOT use screenshot images - generates all frames programmatically.
@@ -860,7 +860,7 @@ def main() -> None:
         "eval_dir",
         nargs="?",
         default=None,
-        help="Path to results directory (default: process all subdirs under results/)",
+        help="Path to eval directory (default: process all subdirs under eval/)",
     )
     parser.add_argument(
         "--output",
@@ -896,16 +896,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # If no eval_dir provided, process all subdirectories under results/
+    # If no eval_dir provided, process all subdirectories under eval/
     if args.eval_dir is None:
-        results_base = Path("results")
+        results_base = Path("eval")
         if not results_base.exists():
-            print("Error: results/ directory not found")
+            print("Error: eval/ directory not found")
             return
 
         subdirs = [d for d in results_base.iterdir() if d.is_dir()]
         if not subdirs:
-            print("No subdirectories found under results/")
+            print("No subdirectories found under eval/")
             return
 
         # Only process dirs that don't have replay.gif yet (unless --force)
