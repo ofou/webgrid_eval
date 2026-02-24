@@ -155,7 +155,7 @@ class TestHUD:
             hud = _hud(state)
 
         net = 8
-        expected_bps = (net / 60.0) * math.log2(64)
+        expected_bps = (net / 60.0) * math.log2(63)
         assert abs(hud["bps"] - expected_bps) < 0.01
 
     def test_hud_zero_net(self):

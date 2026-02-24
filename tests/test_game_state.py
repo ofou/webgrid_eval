@@ -108,8 +108,8 @@ class TestMetrics:
 
         net = correct - incorrect
         if net > 0:
-            bps = (net / 60.0) * math.log2(grid_size)
-            expected = (8 / 60.0) * math.log2(64)  # grid_size, not grid_size² - 1
+            bps = (net / 60.0) * math.log2(grid_size - 1)
+            expected = (8 / 60.0) * math.log2(63)  # log2(N - 1), matching Neuralink
             assert abs(bps - expected) < 0.01
 
 

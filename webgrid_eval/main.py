@@ -26,10 +26,13 @@ def compute_ntpm_bps(
     """Compute NTPM and BPS from correct/incorrect click counts.
 
     NTPM = net correct count (correct - incorrect).
-    BPS  = (net / 60) * log2(N), where N = total grid cells.
+    BPS  = max((net / 60) * log2(N - 1), 0), where N = total grid cells.
 
-    Neuralink Webgrid frontend reference:
-      _enviroment/src/features/game/components/grid/hooks/useBitsPerSecond.tsx
+    Matches the Neuralink Webgrid frontend formula:
+      function E(f, t) { return Math.max(Math.log2(t * t - 1) * f / 60, 0) }
+      where f = net, t = grid_side, so t*t - 1 = grid_size - 1.
+
+    Reference: neuralink.com/webgrid → pages_webgrid.page.*.js
     """
     net = correct - incorrect
     ntpm = float(net)
@@ -37,7 +40,7 @@ def compute_ntpm_bps(
     if net <= 0:
         return ntpm, 0.0
 
-    bps = (net / 60.0) * math.log2(grid_size)
+    bps = (net / 60.0) * math.log2(grid_size - 1)
     return ntpm, bps
 
 

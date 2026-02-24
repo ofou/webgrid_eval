@@ -55,7 +55,7 @@ def _hud(state: Any, last_click: bool | None = None) -> dict[str, Any]:
     ntpm = float(net)
     bps = 0.0
     if net > 0:
-        bps = (net / 60.0) * math.log2(state.grid_size)
+        bps = (net / 60.0) * math.log2(state.grid_size - 1)
     return {
         "time": f"{mm:02d}:{ss:02d}",
         "bps": bps,
@@ -80,7 +80,7 @@ def _hud_line(state: Any) -> str:
     net = state.score - state.incorrect_count
     bps = 0.0
     if net > 0:
-        bps = (net / 60.0) * math.log2(state.grid_size)
+        bps = (net / 60.0) * math.log2(state.grid_size - 1)
 
     return f"{mm:02d}:{ss:02d} {bps:.2f} BPS {net} NTPM {state.grid_side}×{state.grid_side}"
 
