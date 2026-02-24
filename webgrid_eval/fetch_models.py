@@ -8,11 +8,9 @@ from typing import Any
 import yaml  # Add this import; install via pip if needed
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
-LOCAL_URL = (
-    "http://localhost:1234/v1/models"  # Adjusted endpoint if needed; check your local API docs
-)
-MODELS_YAML = Path(__file__).parent / "openrouter.yaml"
-LOCAL_YAML = Path(__file__).parent / "local.yaml"
+LOCAL_URL = "http://localhost:1234/v1/models"
+MODELS_YAML = Path(__file__).parent.parent / "configs" / "openrouter.yaml"
+LOCAL_YAML = Path(__file__).parent.parent / "configs" / "local.yaml"
 
 
 def _fetch_openrouter(base_url: str) -> list[str]:
@@ -47,19 +45,16 @@ def _fetch_local(base_url: str) -> list[str]:
 
 
 def update_yaml(yaml_path: Path, model_ids: list[str]) -> None:
-    """Update YAML file with given model_ids in the options key."""
-    # Load existing YAML safely
+    """Update YAML file with fetched model_ids in the 'options' key."""
     with open(yaml_path) as f:
-        data = yaml.safe_load(f)
+        data = yaml.safe_load(f) or {}
 
-    # Update the 'options' key (assumes the YAML has a top-level 'options' list; adjust if nested)
-    data["options"] = model_ids  # Or data['some_section']['options'] if nested
+    data["options"] = model_ids
 
-    # Write back with safe_dump to preserve YAML formatting
     with open(yaml_path, "w") as f:
         yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
 
-    print(f"Updated {yaml_path}")
+    print(f"Updated {yaml_path} ({len(model_ids)} models)")
 
 
 def main() -> None:

@@ -43,8 +43,7 @@ def _load_cursor() -> tuple[Any, int, int]:
     return _CURSOR_CACHE
 
 
-# Default canvas size for backward compatibility
-DEFAULT_CANVAS_SIZE = 512
+DEFAULT_CANVAS_SIZE = 256
 DEFAULT_GRID_SIDE = 8
 K = 0.002
 
@@ -57,7 +56,8 @@ def get_timestamp_ms(filename: str) -> int | None:
     return None
 
 
-def _line_width(side: int, canvas_size: int = DEFAULT_CANVAS_SIZE) -> int:
+def _line_width(canvas_size: int = DEFAULT_CANVAS_SIZE) -> int:
+    """Line width in pixels (Neuralink: r = width * K)."""
     return max(1, round(canvas_size * K))
 
 
@@ -66,7 +66,7 @@ def _get_cell_rect(
 ) -> tuple[int, int, int, int]:
     """Cell fill rect: same as screenshot.py (Neuralink)."""
     c = canvas_size / side
-    r = _line_width(side, canvas_size)
+    r = _line_width(canvas_size)
     inset = r / 2
     x0 = col * c + inset
     y0 = row * c + inset
@@ -187,7 +187,7 @@ def render_frame(
 
             draw.rectangle([x0, y0, x1, y1], fill=fill)
 
-    line_w = _line_width(side, canvas_size)
+    line_w = _line_width(canvas_size)
     for a in range(side + 1):
         y_center = a * cell_size
         x_center = a * cell_size
@@ -577,9 +577,6 @@ def create_gif(
     Returns:
         Path to created GIF file
     """
-    if Image is None:
-        raise ImportError("Pillow is required: pip install Pillow")
-
     eval_path = Path(eval_dir)
     if not eval_path.exists():
         raise FileNotFoundError(f"Directory not found: {eval_dir}")
@@ -870,7 +867,7 @@ def main() -> None:
         "-s",
         type=float,
         default=10.0,
-        help="Playback speed (default: 1 = real-time)",
+        help="Playback speed multiplier (default: 10 = 10x real-time)",
     )
     parser.add_argument(
         "--fps",

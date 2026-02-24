@@ -21,23 +21,19 @@ DEFAULT_GRID_SIZE = DEFAULT_GRID_SIDE * DEFAULT_GRID_SIDE
 
 
 def compute_ntpm_bps(
-    correct: int, incorrect: int, elapsed_seconds: float, grid_size: int
+    correct: int, incorrect: int, grid_size: int
 ) -> tuple[float, float]:
-    """Net = correct - incorrect.
+    """Compute NTPM and BPS from correct/incorrect click counts.
 
-    NTPM = Net (raw count).
-    BPS (Neuralink): (net / 60) * log2(grid_size² - 1).
+    NTPM = net correct count (correct - incorrect).
+    BPS  = (net / 60) * log2(N), where N = total grid cells.
 
-    Note: grid_size is the number of cells (e.g. 64 for 8×8).
+    Neuralink Webgrid frontend reference:
+      _enviroment/src/features/game/components/grid/hooks/useBitsPerSecond.tsx
     """
     net = correct - incorrect
-    # Frontend: NTPM is just the net count (displayed as "NTPM: {net}")
     ntpm = float(net)
 
-    # Neuralink Webgrid frontend formula: BPS = (net / 60) * log2(N)
-    # where N = total grid cells (e.g., 900 for 30x30)
-    # Reference: _enviroment/src/features/game/components/grid/hooks/useBitsPerSecond.tsx
-    # If net <= 0, it returns 0.
     if net <= 0:
         return ntpm, 0.0
 
@@ -195,68 +191,69 @@ def _messages_for_dump(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @app.post("/api/session/start", response_model=SessionStartResponse)
-def session_start(req: SessionStartRequest) -> SessionStartResponse:
+async def session_start(req: SessionStartRequest) -> SessionStartResponse:
     """Start a session: run agentic loop (screen, mouse_move, mouse_click), return score."""
-    state = GameState(grid_size=req.grid_size, canvas_size=req.canvas_size)
-    state.start_time = time.time()
-    state.select_random_target()
-    save_dir = str(Path("results") / _model_to_dir_name(req.model))
-    # Clear existing folder to ensure fresh results
-    save_dir_path = Path(save_dir)
-    if save_dir_path.exists():
-        shutil.rmtree(save_dir_path)
-    max_sec = float(req.max_seconds) if req.max_seconds is not None else 70.0
-    score, messages = run_agentic_loop(
-        state,
-        model=req.model,
-        save_dir=save_dir,
-        max_seconds=max_sec,
-        max_images=req.max_images,
-        base_url=req.base_url,
-        api_key=req.api_key,
-    )
-    # Match official implementation: fixed duration (e.g. 70s), not variable actual elapsed
-    elapsed = max_sec
-    ntpm, bps = compute_ntpm_bps(state.score, state.incorrect_count, elapsed, req.grid_size)
-    resp = SessionStartResponse(
-        model=req.model,
-        score=state.score,
-        incorrect=state.incorrect_count,
-        elapsed_seconds=elapsed,
-        ntpm=ntpm,
-        bps=bps,
-        peak_score=_format_peak_score(bps, ntpm),
-        grid_side=state.grid_side,
-        size_px=state.canvas_size,
-        messages_count=len(messages),
-        history=messages,
-        screenshots_dir=save_dir,
-    )
 
-    result_path = Path(save_dir) / "result.json"
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        result_path.write_text(json.dumps(resp.model_dump(exclude={"history"}), indent=2))
-    except OSError as e:
-        raise RuntimeError(f"Failed to write result.json to {result_path}: {e}") from e
-    history_path = Path(save_dir) / "history.json"
-    history_path.write_text(json.dumps(_messages_for_dump(messages), indent=2, default=str))
-    return resp
+    def _run_sync() -> SessionStartResponse:
+        state = GameState(grid_size=req.grid_size, canvas_size=req.canvas_size)
+        state.start_time = time.time()
+        state.select_random_target()
+        save_dir = str(Path("results") / _model_to_dir_name(req.model))
+        save_dir_path = Path(save_dir)
+        if save_dir_path.exists():
+            shutil.rmtree(save_dir_path)
+        max_sec = float(req.max_seconds) if req.max_seconds is not None else 70.0
+        score, messages = run_agentic_loop(
+            state,
+            model=req.model,
+            save_dir=save_dir,
+            max_seconds=max_sec,
+            max_images=req.max_images,
+            base_url=req.base_url,
+            api_key=req.api_key,
+        )
+        elapsed = max_sec
+        ntpm, bps = compute_ntpm_bps(state.score, state.incorrect_count, req.grid_size)
+        resp = SessionStartResponse(
+            model=req.model,
+            score=state.score,
+            incorrect=state.incorrect_count,
+            elapsed_seconds=elapsed,
+            ntpm=ntpm,
+            bps=bps,
+            peak_score=_format_peak_score(bps, ntpm),
+            grid_side=state.grid_side,
+            size_px=state.canvas_size,
+            messages_count=len(messages),
+            history=messages,
+            screenshots_dir=save_dir,
+        )
+
+        result_path = Path(save_dir) / "result.json"
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result_path.write_text(json.dumps(resp.model_dump(exclude={"history"}), indent=2))
+        except OSError as e:
+            raise RuntimeError(f"Failed to write result.json to {result_path}: {e}") from e
+        history_path = Path(save_dir) / "history.json"
+        history_path.write_text(json.dumps(_messages_for_dump(messages), indent=2, default=str))
+        return resp
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run_sync)
 
 
 class EvalRunRequest(BaseModel):
     """Request body for batch eval (models list or models_file path)."""
 
-    models: list[str | dict[str, Any]] = []  # string or dict with {id, reasoning_effort, ...}
-    models_file: str | None = (
-        None  # path to YAML with "models: [...]" and optional base_url, api_key
-    )
-    grid_size: int = DEFAULT_GRID_SIZE  # 8x8
-    max_seconds: int | None = None  # stop eval after this many seconds per model
-    max_images: int | None = None  # cap images per request (e.g. 8 for Mistral)
-    base_url: str | None = None  # LLM API base URL (from YAML or body)
-    api_key: str | None = None  # LLM API key (from YAML or body)
-    canvas_size: int = 256  # screenshot canvas size in pixels
+    models: list[str | dict[str, Any]] = []
+    models_file: str | None = None
+    grid_size: int | None = None
+    max_seconds: int | None = None
+    max_images: int | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    canvas_size: int | None = None
 
 
 class EvalModelResult(BaseModel):
@@ -313,7 +310,7 @@ async def _eval_single_model(
     model_params: dict[str, Any] | None = None,
 ) -> EvalModelResult:
     """Evaluate a single model (runs in executor to avoid blocking)."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     reasoning_effort = model_params.get("reasoning_effort") if model_params else None
 
     def _run_sync() -> EvalModelResult:
@@ -341,7 +338,7 @@ async def _eval_single_model(
         history_path.write_text(json.dumps(_messages_for_dump(messages), indent=2, default=str))
         # Match official implementation: fixed duration (e.g. 70s), not variable actual elapsed
         elapsed = max_sec
-        ntpm, bps = compute_ntpm_bps(state.score, state.incorrect_count, elapsed, grid_size)
+        ntpm, bps = compute_ntpm_bps(state.score, state.incorrect_count, grid_size)
         # Use folder name (model:param) as the result model name
         result_model_name = _model_to_dir_name(model, model_params)
         result = EvalModelResult(
@@ -374,11 +371,11 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
     models: list[str | dict[str, Any]] = list(req.models)
     base_url = req.base_url
     api_key = req.api_key
-    grid_size = req.grid_size
+    grid_size = req.grid_size if req.grid_size is not None else DEFAULT_GRID_SIZE
     max_sec = float(req.max_seconds) if req.max_seconds is not None else 70.0
     max_images = req.max_images
+    canvas_size = req.canvas_size if req.canvas_size is not None else 256
 
-    canvas_size = req.canvas_size
     if req.models_file:
         try:
             (
@@ -394,23 +391,19 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
             raise HTTPException(status_code=404, detail=str(e)) from e
         if not models:
             models = list(file_models)
-        if file_base_url is not None:
+        # YAML provides defaults; explicit request body values override
+        if req.base_url is None and file_base_url is not None:
             base_url = file_base_url
-        if file_api_key is not None:
+        if req.api_key is None and file_api_key is not None:
             api_key = file_api_key
-        grid_size = file_grid_size
-        max_sec = file_max_seconds
-        canvas_size = file_canvas_size
-        if file_max_images is not None:
+        if req.grid_size is None:
+            grid_size = file_grid_size
+        if req.max_seconds is None:
+            max_sec = file_max_seconds
+        if req.canvas_size is None:
+            canvas_size = file_canvas_size
+        if req.max_images is None and file_max_images is not None:
             max_images = file_max_images
-        if req.grid_size != DEFAULT_GRID_SIZE:
-            grid_size = req.grid_size
-        if req.max_seconds is not None:
-            max_sec = float(req.max_seconds)
-        if req.max_images is not None:
-            max_images = req.max_images
-        if req.canvas_size != 256:
-            canvas_size = req.canvas_size
 
     if not models:
         return EvalRunResponse(results=[])
@@ -469,7 +462,7 @@ async def eval_run(req: EvalRunRequest) -> EvalRunResponse:
                 EvalModelResult(
                     model=model_name,
                     error=str(raw),
-                    grid_side=grid_size,
+                    grid_side=int(grid_size**0.5),
                 )
             )
         elif isinstance(raw, EvalModelResult):

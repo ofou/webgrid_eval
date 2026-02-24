@@ -35,8 +35,8 @@ class TestComputeNTPMBPS:
 
     def test_compute_positive_net(self):
         """Test calculation with positive net score."""
-        correct, incorrect, elapsed, grid_size = 10, 2, 60.0, 64
-        ntpm, bps = compute_ntpm_bps(correct, incorrect, elapsed, grid_size)
+        correct, incorrect, grid_size = 10, 2, 64
+        ntpm, bps = compute_ntpm_bps(correct, incorrect, grid_size)
 
         net = correct - incorrect  # 8
         assert ntpm == float(net)
@@ -45,16 +45,16 @@ class TestComputeNTPMBPS:
 
     def test_compute_zero_net(self):
         """Test calculation with zero net score."""
-        correct, incorrect, elapsed, grid_size = 5, 5, 60.0, 64
-        ntpm, bps = compute_ntpm_bps(correct, incorrect, elapsed, grid_size)
+        correct, incorrect, grid_size = 5, 5, 64
+        ntpm, bps = compute_ntpm_bps(correct, incorrect, grid_size)
 
         assert ntpm == 0.0
         assert bps == 0.0
 
     def test_compute_negative_net(self):
         """Test calculation with negative net score."""
-        correct, incorrect, elapsed, grid_size = 3, 10, 60.0, 64
-        ntpm, bps = compute_ntpm_bps(correct, incorrect, elapsed, grid_size)
+        correct, incorrect, grid_size = 3, 10, 64
+        ntpm, bps = compute_ntpm_bps(correct, incorrect, grid_size)
 
         assert ntpm == -7.0
         assert bps == 0.0  # BPS is 0 when net <= 0
@@ -62,8 +62,8 @@ class TestComputeNTPMBPS:
     def test_compute_different_grid_sizes(self):
         """Test with different grid sizes."""
         # Larger grid should result in higher BPS for same net
-        ntpm1, bps1 = compute_ntpm_bps(10, 0, 60.0, 64)  # 8x8
-        ntpm2, bps2 = compute_ntpm_bps(10, 0, 60.0, 256)  # 16x16
+        ntpm1, bps1 = compute_ntpm_bps(10, 0, 64)  # 8x8
+        ntpm2, bps2 = compute_ntpm_bps(10, 0, 256)  # 16x16
 
         assert ntpm1 == ntpm2 == 10.0
         assert bps2 > bps1  # Larger grid = higher BPS
@@ -280,17 +280,17 @@ class TestEvalRunRequest:
     """Test EvalRunRequest model."""
 
     def test_default_values(self):
-        """Test default field values."""
+        """Test default field values (Optional fields default to None)."""
         req = EvalRunRequest()
 
         assert req.models == []
         assert req.models_file is None
-        assert req.grid_size == 64
+        assert req.grid_size is None
         assert req.max_seconds is None
         assert req.max_images is None
         assert req.base_url is None
         assert req.api_key is None
-        assert req.canvas_size == 256
+        assert req.canvas_size is None
 
 
 class TestEvalModelResult:

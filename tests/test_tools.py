@@ -17,7 +17,6 @@ from webgrid_eval.tools import (
     _get_max_xy,
     _hud,
     _img_message,
-    _packet,
     _require_int,
     _set_cursor_pixel,
     execute_tool,
@@ -179,50 +178,6 @@ class TestHUD:
         hud = _hud(state)
 
         assert hud["time"] == "00:00"
-
-
-class TestPacket:
-    """Test packet generation."""
-
-    def test_packet_structure(self):
-        """Test packet structure and content."""
-        state = GameState(grid_size=64, canvas_size=256)
-        state.cursor_row = 3
-        state.cursor_col = 4
-        state.cursor_x = 80
-        state.cursor_y = 80
-        state.start_time = 0.0
-        state.score = 5
-        state.incorrect_count = 1
-
-        with patch("time.time", return_value=30.0):
-            packet = _packet(state, last_click=True)
-
-        assert "hud" in packet
-        assert "cursor" in packet
-        assert "target" in packet
-        assert "grid_side" in packet
-        assert "size_px" in packet
-
-        assert packet["cursor"]["row"] == 3
-        assert packet["cursor"]["col"] == 4
-        assert packet["cursor"]["x"] == 80
-        assert packet["cursor"]["y"] == 80
-        assert packet["grid_side"] == 8
-        assert packet["size_px"] == 256
-
-    def test_packet_ensures_cursor(self):
-        """Test that packet ensures cursor pixel position."""
-        state = GameState(grid_size=64)
-        state.cursor_row = 0
-        state.cursor_col = 0
-        # cursor_x and cursor_y not set
-
-        packet = _packet(state)
-
-        # Should set cursor position
-        assert packet["cursor"]["x"] is not None
-        assert packet["cursor"]["y"] is not None
 
 
 class TestImgMessage:
