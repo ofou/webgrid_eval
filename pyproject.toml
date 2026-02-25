@@ -59,6 +59,7 @@ dev = [
 ]
 
 [project.scripts]
+webgrid-play = "webgrid_eval.web_game:main"
 webgrid-eval = "webgrid_eval.run_eval:main"
 webgrid-gif = "webgrid_eval.make_gif:main"
 
