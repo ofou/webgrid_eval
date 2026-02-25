@@ -55,7 +55,7 @@ def _hud(state: Any, last_click: bool | None = None) -> dict[str, Any]:
     ntpm = float(net)
     bps = 0.0
     if net > 0:
-        bps = (net / 60.0) * math.log2(state.grid_size)
+        bps = (net / 60.0) * math.log2(state.grid_size - 1)
     return {
         "time": f"{mm:02d}:{ss:02d}",
         "bps": bps,
@@ -80,29 +80,9 @@ def _hud_line(state: Any) -> str:
     net = state.score - state.incorrect_count
     bps = 0.0
     if net > 0:
-        bps = (net / 60.0) * math.log2(state.grid_size)
+        bps = (net / 60.0) * math.log2(state.grid_size - 1)
 
     return f"{mm:02d}:{ss:02d} {bps:.2f} BPS {net} NTPM {state.grid_side}×{state.grid_side}"
-
-
-def _packet(state: Any, last_click: bool | None = None) -> dict[str, Any]:
-    _ensure_cursor_pixel(state)
-    canvas_size = getattr(state, "canvas_size", DEFAULT_CANVAS_SIZE)
-    return {
-        "hud": _hud(state, last_click=last_click),
-        "cursor": {
-            "x": int(state.cursor_x),
-            "y": int(state.cursor_y),
-            "row": int(state.cursor_row),
-            "col": int(state.cursor_col),
-        },
-        "target": {
-            "row": int(getattr(state, "target_row", -1)),
-            "col": int(getattr(state, "target_col", -1)),
-        },
-        "grid_side": int(state.grid_side),
-        "size_px": int(canvas_size),
-    }
 
 
 def _img_message(b64: str, save_path: str | None, hud_text: str | None = None) -> dict[str, Any]:

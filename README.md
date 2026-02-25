@@ -27,7 +27,37 @@ For comparison: Neuralink's eighth clinical trial participant achieved 10.39 BPS
 The goal is to click targets on the grid as quickly as possible while minimizing misclicks. Score is measured in bits per second (BPS), derived from net correct clicks (NTPM) and grid size.
 
 - **NTPM**: Net correct clicks = correct - incorrect
-- **BPS**: `(NTPM / 60) * log2(N)` where N = grid cells (e.g., 64 for 8×8); BPS = 0 when NTPM ≤ 0
+- **BPS**: `max((NTPM / 60) * log2(N - 1), 0)` where N = grid cells (e.g., 900 for 30×30)
+
+Verified against the [Neuralink Webgrid frontend source](https://neuralink.com/webgrid):
+`function E(f, t) { return Math.max(Math.log2(t * t - 1) * f / 60, 0) }`
+
+### Benchmark Results
+
+Results from 10 rounds on the browser-based eval (`make play`, 30×30 grid, 991px canvas, 70s, fullscreen):
+
+| Model | Modality | Grid | Canvas | Round | NTPM | BPS |
+| ----- | -------- | ---- | ------ | ----- | ---- | --- |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 1 | 5 | 0.82 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 2 | 5 | 0.82 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 3 | 5 | 0.82 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 4 | 7 | 1.14 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 5 | 7 | 1.14 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 6 | 5 | 0.82 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 7 | 2 | 0.33 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 8 | 6 | 0.98 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 9 | 3 | 0.49 |
+| claude-4.6-opus (computer use) | Browser click | 30×30 | 991px | 10 | 4 | 0.65 |
+| | | | | **Avg** | **4.9** | **0.80** |
+
+Comparison with other players:
+
+| Player | Method | Grid | Best BPS | Avg BPS |
+| ------ | ------ | ---- | -------- | ------- |
+| Bliss Chapman | Mouse | 35×35 | **17.10** | — |
+| Neuralink P8 | N1 Brain Implant | 30×30 | **10.39** | — |
+| claude-4.6-opus | Computer use (browser click) | 30×30 | **1.14** | **0.80** |
+| gemini-3-flash-preview | API tool pipeline | 30×30 | **0.16** | **~0.16** |
 
 ## Quick Start
 
@@ -39,10 +69,17 @@ cd webgrid_eval
 make install-dev
 ```
 
-### Run your first evaluation
+### Play the game (default eval mode)
 
 ```bash
-# 1. Start the FastAPI server
+make play
+# Open http://localhost:8000 in your browser (F11 for fullscreen)
+```
+
+### Run API-based evaluation (requires LLM API key)
+
+```bash
+# 1. Start the API server
 make dev
 ```
 
@@ -53,7 +90,17 @@ make eval ARGS="configs/openrouter.yaml"
 
 ## Usage
 
-### Configure Models
+### Browser Game (default eval)
+
+```bash
+# Start the game (30×30 grid, 991px canvas, Neuralink-identical UI)
+make play
+# Open http://localhost:8000 → F11 for fullscreen → click blue cells
+```
+
+Results are logged to `results/web_games.json`.
+
+### Configure Models (API eval)
 
 Create a YAML configuration file (see `configs/` for examples):
 

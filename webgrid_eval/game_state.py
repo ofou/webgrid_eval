@@ -61,7 +61,7 @@ class GameState:
     def click_at(self, row: int, col: int) -> tuple[bool, dict]:
         """Click at cell (row, col). Updates cursor and processes click. Returns (correct, data)."""
         self.move_cursor(row, col)
-        return self._click_at(row, col)
+        return self._click_at(self.cursor_row, self.cursor_col)
 
     def _click_at(self, row: int, col: int) -> tuple[bool, dict]:
         """Check if (row, col) is the target; advance and return (True, data) or (False, {})."""

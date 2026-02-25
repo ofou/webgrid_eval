@@ -1,17 +1,17 @@
-.PHONY: clean install dev test eval help lint format docs
+.PHONY: clean install dev play test eval help lint format docs
 
 help:
 	@echo "Available targets:"
+	@echo "  play     - Start browser game (Neuralink-style UI, default eval mode)"
 	@echo "  clean    - Remove evaluation results, screenshots, and cache files"
 	@echo "  install  - Install project dependencies"
 	@echo "  install-dev - Install project with development dependencies"
-	@echo "  dev      - Run FastAPI server in development mode"
+	@echo "  dev      - Run FastAPI API server in development mode"
 	@echo "  test     - Run unit tests"
-	@echo "  eval     - Run model evaluation (use ARGS='--seconds 30' for options)"
+	@echo "  eval     - Run API-based model evaluation (use ARGS='configs/openrouter.yaml')"
 	@echo "  gif      - Generate replay GIFs from evaluation results"
 	@echo "  lint     - Run code linters (ruff, mypy)"
 	@echo "  format   - Format code with black and ruff"
-	@echo "  docs     - Build documentation"
 
 clean:
 	@echo "Cleaning up..."
@@ -39,8 +39,12 @@ install-dev:
 	uv run pre-commit install
 	@echo "Installation complete!"
 
+play:
+	@echo "Starting Webgrid browser game..."
+	uv run python -m webgrid_eval.web_game $(ARGS)
+
 dev:
-	@echo "Starting FastAPI server..."
+	@echo "Starting FastAPI API server..."
 	uv run uvicorn webgrid_eval.main:app --reload --host 0.0.0.0 --port 8000
 
 test:

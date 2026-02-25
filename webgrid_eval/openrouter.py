@@ -1,6 +1,8 @@
 """OpenAI Chat Completions API client; agentic loop with tool_calls."""
 
+import json
 import os
+import random
 import time
 from typing import Any
 
@@ -305,8 +307,7 @@ def run_agentic_loop(
                 resp = client.chat.completions.create(**api_kwargs)
                 break
             except (OpenAIRateLimitError, APIConnectionError, APITimeoutError) as e:
-                # Exponential backoff with jitter: delay = base * 2^attempt + random(0-2s)
-                delay = base_delay * (2**attempt) + (hash(str(time.time())) % 200) / 100
+                delay = base_delay * (2**attempt) + random.uniform(0, 2)
                 if attempt < max_retries - 1:
                     print(
                         f"  ⏳ {model}: {type(e).__name__}, retrying in {delay:.1f}s... "
@@ -316,8 +317,7 @@ def run_agentic_loop(
                 else:
                     raise
             except APIError as e:
-                # Retry on any API error (402 payment required, 429 rate limit, 5xx server errors)
-                delay = base_delay * (2**attempt) + (hash(str(time.time())) % 200) / 100
+                delay = base_delay * (2**attempt) + random.uniform(0, 2)
                 if attempt < max_retries - 1:
                     error_code = getattr(e, "code", None) or getattr(e, "status_code", "unknown")
                     print(
@@ -349,8 +349,6 @@ def run_agentic_loop(
 
         # Debug: print raw response structure to identify thinking content location
         if os.environ.get("DEBUG_THINKING"):
-            import json
-
             print(f"DEBUG msg.content type: {type(msg.content)}")
             is_str = isinstance(msg.content, str) and msg.content
             content_preview = msg.content if is_str else msg.content
@@ -485,16 +483,24 @@ def run_agentic_loop(
                     is_correct = result.get("correct", False)
 
                     if not is_correct:
-                        # Count consecutive errors
                         consecutive_errors = 0
-                        for msg in reversed(messages):
-                            if msg.get("role") == "tool" and "correct" in msg.get("content", ""):
-                                if '"correct": false' in msg.get("content", ""):
-                                    consecutive_errors += 1
-                                else:
-                                    break
+                        for prev_msg in reversed(messages):
+                            if prev_msg.get("role") != "tool":
+                                continue
+                            prev_content = prev_msg.get("content", "")
+                            if not isinstance(prev_content, str):
+                                continue
+                            try:
+                                prev_data = json.loads(prev_content)
+                            except (ValueError, TypeError):
+                                continue
+                            if "correct" not in prev_data:
+                                continue
+                            if prev_data["correct"] is False:
+                                consecutive_errors += 1
+                            else:
+                                break
 
-                        # Provide adaptive hint after 3 consecutive errors
                         if consecutive_errors >= 3:
                             hint_msg = {
                                 "role": "user",
@@ -516,7 +522,7 @@ def run_agentic_loop(
                                 ],
                             }
                             messages.append(hint_msg)
-                except (json.JSONDecodeError, ValueError):
+                except (ValueError, TypeError):
                     pass
 
     # Update state end_time
