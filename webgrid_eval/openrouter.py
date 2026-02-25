@@ -1,6 +1,6 @@
 """OpenAI Chat Completions API client; agentic loop with tool_calls."""
 
-import json as _json_mod
+import json
 import os
 import random
 import time
@@ -349,8 +349,6 @@ def run_agentic_loop(
 
         # Debug: print raw response structure to identify thinking content location
         if os.environ.get("DEBUG_THINKING"):
-            import json
-
             print(f"DEBUG msg.content type: {type(msg.content)}")
             is_str = isinstance(msg.content, str) and msg.content
             content_preview = msg.content if is_str else msg.content
@@ -493,7 +491,7 @@ def run_agentic_loop(
                             if not isinstance(prev_content, str):
                                 continue
                             try:
-                                prev_data = _json_mod.loads(prev_content)
+                                prev_data = json.loads(prev_content)
                             except (ValueError, TypeError):
                                 continue
                             if "correct" not in prev_data:

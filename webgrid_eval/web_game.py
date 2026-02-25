@@ -36,6 +36,7 @@ _grid_size: int = DEFAULT_GRID_SIZE
 _canvas_size: int = DEFAULT_CANVAS_SIZE
 _max_seconds: int = DEFAULT_MAX_SECONDS
 _results_log: list[dict[str, Any]] = []
+_game_logged: bool = False
 
 app = FastAPI(title="Webgrid Eval")
 
@@ -207,13 +208,14 @@ def index() -> str:
 @app.post("/api/start")
 def api_start() -> JSONResponse:
     """Start a new game session."""
-    global _state, _wall_start
+    global _state, _wall_start, _game_logged
     _state = GameState(grid_size=_grid_size, canvas_size=_canvas_size)
     _state.start_time = time.time()
     _state.select_random_target()
     cx, cy = cell_center_pixel(0, 0, _state.grid_side, _canvas_size)
     _state.cursor_x, _state.cursor_y = cx, cy
     _wall_start = time.time()
+    _game_logged = False
     b64 = render_grid_screenshot(_state)
     return JSONResponse(
         {"image": b64, "score": 0, "incorrect": 0, "ntpm": 0, "bps": 0.0, "done": False}
@@ -260,6 +262,7 @@ def api_result() -> JSONResponse:
 
 
 def _finish() -> JSONResponse:
+    global _game_logged
     if _state is None:
         return JSONResponse({"error": "not started"}, status_code=400)
     ntpm, bps = compute_ntpm_bps(_state.score, _state.incorrect_count, _grid_size)
@@ -272,11 +275,13 @@ def _finish() -> JSONResponse:
         "elapsed_seconds": round(time.time() - _wall_start, 1),
         "done": True,
     }
-    _results_log.append(result)
 
-    results_dir = Path("results")
-    results_dir.mkdir(parents=True, exist_ok=True)
-    (results_dir / "web_games.json").write_text(json.dumps(_results_log, indent=2))
+    if not _game_logged:
+        _game_logged = True
+        _results_log.append(result)
+        results_dir = Path("results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        (results_dir / "web_games.json").write_text(json.dumps(_results_log, indent=2))
 
     return JSONResponse(result)
 
