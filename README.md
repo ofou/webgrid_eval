@@ -93,17 +93,12 @@ make eval ARGS="configs/openrouter.yaml"
 ### Browser Game (default eval)
 
 ```bash
-# Start the game server (30×30 grid, Neuralink-identical UI)
+# Start the game (30×30 grid, 991px canvas, Neuralink-identical UI)
 make play
-
-# Custom grid size (8×8)
-make play ARGS="--grid-size 64"
-
-# Custom port
-make play ARGS="--port 8080"
+# Open http://localhost:8000 → F11 for fullscreen → click blue cells
 ```
 
-Open in browser → F11 for fullscreen → click blue cells. Results are logged to `results/web_games.json`.
+Results are logged to `results/web_games.json`.
 
 ### Configure Models (API eval)
 
